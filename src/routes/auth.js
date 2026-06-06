@@ -139,6 +139,58 @@ router.post('/login', async (req, res, next) => {
   }
 });
 
+// ── PATCH /api/auth/me ───────────────────────────────────
+// Qualquer usuário autenticado pode atualizar seu próprio perfil
+router.patch('/me', requireAuth, async (req, res, next) => {
+  try {
+    const schema = z.object({
+      nome:     z.string().min(2).optional(),
+      username: z.string().min(3).optional(),
+      email:    z.string().email().optional(),
+      password: z.string().min(4).optional(),
+    });
+    const data = schema.parse(req.body);
+
+    if (data.username || data.email) {
+      const conflito = await prisma.usuario.findFirst({
+        where: {
+          empresaId: req.auth.empresaId,
+          NOT: { id: req.auth.userId },
+          OR: [
+            ...(data.email    ? [{ email:    data.email.toLowerCase()    }] : []),
+            ...(data.username ? [{ username: data.username.toLowerCase() }] : []),
+          ],
+        },
+      });
+      if (conflito) {
+        return res.status(409).json({ ok: false, message: 'E-mail ou login já está em uso por outro usuário.' });
+      }
+    }
+
+    const updateData = {
+      ...(data.nome     && { nome:     data.nome }),
+      ...(data.username && { username: data.username.toLowerCase() }),
+      ...(data.email    && { email:    data.email.toLowerCase() }),
+    };
+    if (data.password) {
+      updateData.passwordHash = await bcrypt.hash(data.password, 10);
+    }
+
+    const usuario = await prisma.usuario.update({
+      where: { id: req.auth.userId },
+      data:  updateData,
+      select: {
+        id: true, nome: true, username: true,
+        email: true, isDono: true, permissions: true,
+      },
+    });
+
+    res.json({ ok: true, data: usuario });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ── GET /api/auth/me ──────────────────────────────────────
 router.get('/me', requireAuth, async (req, res, next) => {
   try {

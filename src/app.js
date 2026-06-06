@@ -8,8 +8,12 @@ const errorHandler = require('./middleware/errorHandler');
 
 const app = express();
 
-app.use(helmet());
-app.use(cors({ origin: process.env.CORS_ORIGIN || '*' }));
+app.use(helmet({ crossOriginResourcePolicy: false }));
+app.use(cors({
+  origin: (origin, cb) => cb(null, true),
+  methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
+  allowedHeaders: ['Content-Type','Authorization'],
+}));
 app.use(morgan('dev'));
 app.use(express.json());
 
