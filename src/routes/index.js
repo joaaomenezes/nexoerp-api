@@ -1,0 +1,31 @@
+const router = require('express').Router();
+
+const authRoutes    = require('./auth');
+const produtosRoutes = require('./produtos');
+const clientesRoutes = require('./clientes');
+const pedidosRoutes  = require('./pedidos');
+const vendasRoutes     = require('./vendas');
+const financeiroRoutes = require('./financeiro');
+const estoqueRoutes    = require('./estoque');
+const usuariosRoutes   = require('./usuarios');
+const categoriasRoutes = require('./categorias');
+const vendedoresRoutes = require('./vendedores');
+const custosRoutes     = require('./custos');
+const caixasRoutes     = require('./caixas');
+const relatoriosRoutes = require('./relatorios');
+
+router.use('/auth',       authRoutes);
+router.use('/produtos',   produtosRoutes);
+router.use('/clientes',   clientesRoutes);
+router.use('/pedidos',    pedidosRoutes);
+router.use('/vendas',     vendasRoutes);
+router.use('/financeiro', financeiroRoutes);
+router.use('/estoque',    estoqueRoutes);
+router.use('/usuarios',   usuariosRoutes);
+router.use('/categorias', categoriasRoutes);
+router.use('/vendedores', vendedoresRoutes);
+router.use('/custos',    custosRoutes);
+router.use('/caixas',    caixasRoutes);
+router.use('/relatorios', relatoriosRoutes);
+
+module.exports = router;

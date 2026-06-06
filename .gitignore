@@ -1,0 +1,8 @@
+node_modules/
+.env
+prisma/migrations/
+
+# logs locais
+server_err.txt
+server_out.txt
+*.log

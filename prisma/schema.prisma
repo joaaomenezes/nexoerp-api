@@ -1,0 +1,444 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── EMPRESA ────────────────────────────────────────────
+model Empresa {
+  id           String   @id @default(cuid())
+  nome         String
+  cnpj         String?
+  segmento     String?
+  plano        String   @default("free")
+  telefone     String?
+  cidade       String?
+  funcionarios String?
+  criadoEm     DateTime @default(now())
+
+  usuarios             Usuario[]
+  produtos             Produto[]
+  clientes             Cliente[]
+  vendedores           Vendedor[]
+  pedidos              Pedido[]
+  vendas               Venda[]
+  lancamentos          Lancamento[]
+  movimentacoes        Movimentacao[]
+  depositos            Deposito[]
+  categorias           Categoria[]
+  categoriasFinanceiras CategoriaFinanceira[]
+  caixas               Caixa[]
+  custos               Custo[]
+  carrinhosSuspensos   CarrinhoSuspenso[]
+  historicoRelatorios  HistoricoRelatorio[]
+  configuracao         Configuracao?
+  configuracaoPDV      ConfiguracaoPDV?
+  catalogoConfig       CatalogoConfig?
+
+  @@map("empresas")
+}
+
+// ─── USUÁRIO ─────────────────────────────────────────────
+model Usuario {
+  id           String   @id @default(cuid())
+  nome         String
+  username     String
+  email        String
+  passwordHash String
+  isDono       Boolean  @default(false)
+  permissions  Json?
+  criadoEm     DateTime @default(now())
+
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  empresaId String
+
+  @@unique([email, empresaId])
+  @@unique([username, empresaId])
+  @@map("usuarios")
+}
+
+// ─── PRODUTO ─────────────────────────────────────────────
+model Produto {
+  id             String   @id @default(cuid())
+  sku            String
+  nome           String
+  cat            String?
+  marca          String?
+  unidade        String   @default("un")
+  descricao      String?
+  preco          Float    @default(0)
+  custo          Float    @default(0)
+  estoque        Int      @default(0)
+  estoqueMin     Int      @default(0)
+  estoqueMax     Int      @default(0)
+  status         String   @default("ativo")
+  emoji          String   @default("📦")
+  cor            String   @default("#00c896")
+  vendas         Int      @default(0)
+  destaque       Boolean  @default(false)
+  exibirPdv      Boolean  @default(true)
+  controlEstoque Boolean  @default(true)
+  deposito        String?
+  posicao         String?
+  fornecedor      String?
+  prazo           Int?
+  ean             String?
+  ncm             String?
+  cest            String?
+  cfop            String?
+  cst             String?
+  icms            String?
+  pis             String?
+  precoMin        Float?
+  descMax         Float?
+  tabela          String?
+  vendaSemEstoque Boolean  @default(false)
+  perecivel       Boolean  @default(false)
+  lote            String?
+  dataFabricacao  String?
+  dataVencimento  String?
+  imagem          String?
+  ultimaEntrada   String?
+  criadoEm        DateTime @default(now())
+  atualizadoEm    DateTime @updatedAt
+
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  empresaId String
+
+  @@unique([sku, empresaId])
+  @@map("produtos")
+}
+
+// ─── CLIENTE / FORNECEDOR ────────────────────────────────
+// Campo `secao` distingue: "clientes" | "fornecedores"
+model Cliente {
+  id          String  @id @default(cuid())
+  nome        String
+  tipo        String  @default("pf")       // pf | pj
+  secao       String  @default("clientes") // clientes | fornecedores
+  doc         String? // CPF ou CNPJ
+  rg          String?
+  nascimento  String?
+  genero      String?
+  tel         String?
+  tel2        String?
+  email       String?
+  site        String?
+  cep         String?
+  logradouro  String?
+  numero      String?
+  complemento String?
+  bairro      String?
+  cidade      String?
+  estado      String?
+  pais        String? @default("Brasil")
+  status      String  @default("ativo")
+  compras     Int     @default(0)
+  pedidos     Int     @default(0)
+  limite      Float   @default(0)
+  desconto    String?
+  condicao    String?
+  vendedor    String? // nome do vendedor responsável
+  vendedorId  String? // FK para Vendedor
+  grupo       String?
+  origem      String?
+  tags        String?
+  obs         String?
+  cadastro    String?
+  criadoEm    DateTime @default(now())
+
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  empresaId String
+
+  @@map("clientes")
+}
+
+// ─── VENDEDOR ────────────────────────────────────────────
+model Vendedor {
+  id       String  @id @default(cuid())
+  nome     String
+  tipo     String  @default("pf") // pf | pj
+  doc      String? // CPF ou CNPJ
+  tel      String?
+  email    String?
+  status   String  @default("ativo")
+  cadastro String?
+  criadoEm DateTime @default(now())
+
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  empresaId String
+
+  @@map("vendedores")
+}
+
+// ─── PEDIDO ──────────────────────────────────────────────
+model Pedido {
+  id         String   @id
+  status     String   @default("orcamento")
+  cliente    String?
+  clienteId  String?
+  vendedor   String?
+  vendedorId String?
+  itens      Json     @default("[]")
+  subtotal   Float    @default(0)
+  desconto   Float    @default(0)
+  total      Float    @default(0)
+  forma      String?
+  condicao   String?
+  obs        String?
+  dataISO    DateTime @default(now())
+  dataStr    String?
+  validade   String?
+  entrega    String?
+  obsCliente String?
+  obsInterna String?
+  ref        String?
+  parcelas   Json?
+
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  empresaId String
+
+  @@map("pedidos")
+}
+
+// ─── VENDA ───────────────────────────────────────────────
+model Venda {
+  id            String   @id
+  cliente       String?
+  clienteId     String?
+  operador      String?
+  operadorId    String?
+  metodo        String?
+  itens         Json     @default("[]")
+  subtotal      Float    @default(0)
+  desconto      Float    @default(0)
+  total         Float    @default(0)
+  status        String   @default("concluida")
+  tipo          String   @default("pdv") // pdv | pedido
+  estornoMotivo String?
+  dataISO       DateTime @default(now())
+  dataStr       String?
+  horaStr       String?
+
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  empresaId String
+
+  @@map("vendas")
+}
+
+// ─── LANÇAMENTO FINANCEIRO ───────────────────────────────
+model Lancamento {
+  id             String   @id @default(cuid())
+  tipo           String   // receita | despesa
+  descricao      String
+  valor          Float
+  vencimento     String?
+  categoria      String?
+  parte          String?
+  status         String   @default("avencer") // avencer | pago | vencida
+  obs            String?
+  pagoEm         String?
+  formaPagamento String?
+  vendaId        String?  // referência à venda que gerou este lançamento
+  pedidoId       String?  // referência ao pedido que gerou este lançamento
+  criadoEm       DateTime @default(now())
+
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  empresaId String
+
+  @@map("lancamentos")
+}
+
+// ─── MOVIMENTAÇÃO DE ESTOQUE ─────────────────────────────
+model Movimentacao {
+  id       String   @id @default(cuid())
+  tipo     String   // entrada | saida | ajuste | transferencia
+  prodId   String?
+  produto  String
+  qty      Float
+  deposito String?
+  destino  String?
+  motivo   String?
+  operador String?
+  dataISO  DateTime @default(now())
+  data     String?
+
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  empresaId String
+
+  @@map("movimentacoes")
+}
+
+// ─── DEPÓSITO ────────────────────────────────────────────
+model Deposito {
+  id       String  @id @default(cuid())
+  nome     String
+  tipo     String?
+  endereco String?
+  icone    String? @default("🏭")
+  cor      String? @default("var(--accent)")
+  ativo    Boolean @default(true)
+  criadoEm DateTime @default(now())
+
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  empresaId String
+
+  @@map("depositos")
+}
+
+// ─── CATEGORIA DE PRODUTO ────────────────────────────────
+model Categoria {
+  id       String  @id @default(cuid())
+  nome     String
+  tipo     String?
+  criadoEm DateTime @default(now())
+
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  empresaId String
+
+  @@map("categorias")
+}
+
+// ─── CATEGORIA FINANCEIRA (centro de custos/despesas) ────
+model CategoriaFinanceira {
+  id       String  @id @default(cuid())
+  nome     String
+  tipo     String  // custo | despesa
+  cor      String?
+  criadoEm DateTime @default(now())
+
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  empresaId String
+
+  @@map("categorias_financeiras")
+}
+
+// ─── CAIXA PDV ───────────────────────────────────────────
+model Caixa {
+  id          String    @id @default(cuid())
+  aberto      Boolean   @default(false)
+  operador    String?
+  operadorId  String?
+  fundo       Float     @default(0)
+  abertura    DateTime?
+  aberturaStr String?
+  fechamento  DateTime?
+  totalVendas Float     @default(0)
+  sangrias    Json?
+  suprimentos Json?
+
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  empresaId String
+
+  @@map("caixas")
+}
+
+// ─── CUSTO OPERACIONAL ───────────────────────────────────
+model Custo {
+  id            String   @id @default(cuid())
+  descricao     String
+  categoria     String?
+  valor         Float
+  data          String?
+  tipo          String   @default("custo") // custo | despesa
+  fornecedor    String?
+  obs           String?
+  recorrenciaId String?  // grupos de entradas recorrentes
+  criadoEm      DateTime @default(now())
+
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  empresaId String
+
+  @@map("custos")
+}
+
+// ─── CARRINHO SUSPENSO (PDV) ─────────────────────────────
+model CarrinhoSuspenso {
+  id       String   @id @default(cuid())
+  nome     String?
+  itens    Json     @default("[]")
+  total    Float    @default(0)
+  criadoEm DateTime @default(now())
+
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  empresaId String
+
+  @@map("carrinhos_suspensos")
+}
+
+// ─── HISTÓRICO DE RELATÓRIOS ─────────────────────────────
+model HistoricoRelatorio {
+  id          String   @id @default(cuid())
+  relatorioId String
+  titulo      String
+  periodo     String?
+  dados       Json     @default("{}")
+  criadoEm    DateTime @default(now())
+
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  empresaId String
+
+  @@map("historico_relatorios")
+}
+
+// ─── CONFIGURAÇÃO GLOBAL DO SISTEMA ──────────────────────
+// Um único registro por empresa. Armazena como JSON para
+// flexibilidade (toggles, cor de destaque, logo, etc.)
+model Configuracao {
+  id           String   @id @default(cuid())
+  dados        Json     @default("{}")
+  criadoEm     DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  empresaId String  @unique
+
+  @@map("configuracoes")
+}
+
+// ─── CONFIGURAÇÃO DO PDV ─────────────────────────────────
+// Um único registro por empresa.
+model ConfiguracaoPDV {
+  id                String   @id @default(cuid())
+  pixTipoChave      String   @default("aleatoria")
+  pixChave          String?
+  pixBeneficiario   String?
+  pixCidade         String?
+  terminalOperadora String   @default("demo")
+  terminalId        String?
+  jurosAPartirDe    Int      @default(4)
+  maxParcelas       Int      @default(12)
+  taxaJurosMensal   Float    @default(0.0299)
+  exigirFundo       Boolean  @default(false)
+  exigirOperador    Boolean  @default(false)
+  overtimeEnabled   Boolean  @default(true)
+  overtimeHours     Int      @default(8)
+  notasRapidas      Json     @default("[10,20,50,100,200]")
+  lojaNome          String?
+  lojaCnpj          String?
+  lojaRodape        String?
+  criadoEm          DateTime @default(now())
+  atualizadoEm      DateTime @updatedAt
+
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  empresaId String  @unique
+
+  @@map("configuracoes_pdv")
+}
+
+// ─── CONFIGURAÇÃO DO CATÁLOGO ────────────────────────────
+// Um único registro por empresa. Armazena opções do PDF/catálogo.
+model CatalogoConfig {
+  id           String   @id @default(cuid())
+  dados        Json     @default("{}")
+  criadoEm     DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  empresaId String  @unique
+
+  @@map("catalogo_config")
+}
