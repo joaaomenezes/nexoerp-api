@@ -4,15 +4,16 @@ Backend do sistema NexoERP: API em **Node.js + Express + Prisma + PostgreSQL**, 
 
 O **frontend** (telas HTML) fica em outro repositório: [`sistemy`](https://github.com/joaaomenezes/sistemy). Ele conversa com esta API em `http://localhost:3333/api`.
 
+O **banco de dados** fica hospedado na nuvem (Neon — PostgreSQL). Não é necessário instalar PostgreSQL na sua máquina.
+
 ---
 
 ## ✅ O que você precisa ter instalado
 
 1. **Node.js** (versão 18 ou superior) — https://nodejs.org
-2. **PostgreSQL** (o banco de dados) — https://www.postgresql.org/download/
-3. **Git** — https://git-scm.com
+2. **Git** — https://git-scm.com
 
-> Para conferir se já tem, abra o terminal e digite `node -v` e `psql --version`.
+> Para conferir se já tem, abra o terminal e digite `node -v` e `git --version`.
 
 ---
 
@@ -31,7 +32,7 @@ npm install
 ```
 
 ### 3. Criar o arquivo `.env`
-Copie o arquivo de exemplo e depois preencha com os seus dados:
+Copie o arquivo de exemplo:
 ```bash
 # Windows (PowerShell)
 Copy-Item .env.example .env
@@ -39,33 +40,54 @@ Copy-Item .env.example .env
 # Mac/Linux
 cp .env.example .env
 ```
-Abra o `.env` e ajuste, principalmente, a **senha do PostgreSQL** dentro de `DATABASE_URL`.
+Abra o `.env` e preencha as três variáveis:
 
-> O `.env` guarda segredos (senha do banco, chave do JWT). Ele **nunca** é enviado pro GitHub — por isso você precisa criá-lo em cada máquina.
-
-### 4. Criar o banco de dados
-Crie um banco vazio chamado `nexoerp` no PostgreSQL (pelo pgAdmin ou pelo terminal):
-```bash
-createdb nexoerp
+```env
+DATABASE_URL="<connection string do Neon — peça ao dono do projeto>"
+JWT_SECRET="<frase secreta — peça ao dono do projeto>"
+PORT=3333
 ```
 
-### 5. Criar as tabelas (migrations)
-Isso monta toda a estrutura do banco automaticamente:
+> O `.env` guarda segredos (senha do banco, chave do JWT). Ele **nunca** é enviado pro GitHub — por isso você precisa criá-lo em cada máquina. Peça os valores ao João.
+
+### 4. Criar as tabelas no banco
+Isso aplica as migrations no banco Neon (já hospedado na nuvem):
 ```bash
 npx prisma migrate deploy
 npx prisma generate
 ```
 
-### 6. Subir a API
+### 5. Subir a API
 ```bash
 npm run dev
 ```
-Se aparecer algo como **"Server running on port 3333"**, está funcionando! 🎉
+Se aparecer **"NexoERP API rodando em http://localhost:3333"**, está funcionando! 🎉
 Deixe esse terminal aberto enquanto estiver usando o sistema.
 
-### 7. Abrir o sistema
-Abra os arquivos `.html` do repositório `sistemy` no navegador.
-Como o banco começa **vazio**, use a tela de **Cadastro** para criar a sua empresa e o primeiro usuário.
+### 6. Abrir o sistema
+Abra os arquivos `.html` do repositório `sistemy` no navegador e faça login com as credenciais de dev abaixo.
+
+---
+
+## 🔑 Credenciais de desenvolvimento
+
+| Campo | Valor |
+|---|---|
+| **E-mail** | `admin@loja.com` |
+| **Senha** | `123456` |
+| **Empresa** | NexoERP Dev |
+
+> Essas credenciais funcionam no banco de nuvem compartilhado. Não use para produção.
+
+---
+
+## 📅 Uso do dia a dia (após primeira configuração)
+
+```bash
+git pull              # pega as últimas alterações
+npm install           # só se o package.json mudou
+npm run dev           # sobe a API
+```
 
 ---
 
@@ -92,7 +114,7 @@ nexoerp-api/
 | Comando | O que faz |
 |---|---|
 | `npm run dev` | Sobe a API e reinicia sozinho ao salvar arquivos |
-| `npm start` | Sobe a API em modo normal |
+| `npm start` | Soba a API em modo normal |
 | `npm run db:studio` | Abre o Prisma Studio (ver/editar o banco no navegador) |
 | `npm run db:migrate` | Cria uma nova migration ao mudar o `schema.prisma` |
 
@@ -100,6 +122,7 @@ nexoerp-api/
 
 ## ❓ Problemas comuns
 
-- **"Can't reach database server"** → o PostgreSQL não está rodando, ou a `DATABASE_URL` no `.env` está com senha/porta errada.
-- **Frontend não carrega dados** → confira se a API está rodando (passo 6) e se a porta é a `3333`.
-- **`prisma migrate deploy` falhou** → confirme que o banco `nexoerp` foi criado (passo 4).
+- **"Can't reach database server"** → a `DATABASE_URL` no `.env` está errada ou faltando. Confirme com o dono do projeto.
+- **Frontend não carrega dados** → confira se a API está rodando (passo 5) e se a porta é a `3333`.
+- **`prisma migrate deploy` falhou** → verifique se a `DATABASE_URL` está correta e se há conexão com a internet.
+- **Porta 3333 em uso** → outro processo está rodando. No PowerShell: `Get-NetTCPConnection -LocalPort 3333 | Select-Object OwningProcess` para achar o PID e encerrá-lo.
