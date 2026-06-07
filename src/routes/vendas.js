@@ -10,6 +10,15 @@ router.use(requireAuth);
 router.use(requirePermission('vendas'));
 
 // ── Validação ─────────────────────────────────────────────
+const vendaItemSchema = z.object({
+  id:       z.string().optional(),
+  nome:     z.string().optional(),
+  emoji:    z.string().optional(),
+  preco:    z.number().min(0).optional(),
+  qty:      z.number().positive().optional(),
+  subtotal: z.number().min(0).optional(),
+}).passthrough();
+
 const vendaSchema = z.object({
   id:            z.string().optional(),
   cliente:       z.string().optional(),
@@ -17,7 +26,7 @@ const vendaSchema = z.object({
   operador:      z.string().optional(),
   operadorId:    z.string().optional(),
   metodo:        z.string().optional(),
-  itens:         z.array(z.any()).optional(),
+  itens:         z.array(vendaItemSchema).optional(),
   subtotal:      z.number().min(0).optional(),
   desconto:      z.number().min(0).optional(),
   total:         z.number().min(0).optional(),
@@ -27,6 +36,12 @@ const vendaSchema = z.object({
   dataStr:       z.string().optional(),
   horaStr:       z.string().optional(),
 });
+
+function httpError(status, message) {
+  const err = new Error(message);
+  err.status = status;
+  return err;
+}
 
 // ── GET /api/vendas ───────────────────────────────────────
 router.get('/', async (req, res, next) => {
@@ -93,12 +108,18 @@ router.post('/', async (req, res, next) => {
           });
 
           if (prod) {
+            const qty = Number(item.qty || 1);
+            if (qty <= 0) throw httpError(400, 'Quantidade inválida na venda.');
+            if (prod.controlEstoque !== false && !prod.vendaSemEstoque && prod.estoque < qty) {
+              throw httpError(400, `Estoque insuficiente para "${prod.nome}". Disponível: ${prod.estoque}.`);
+            }
+
             if (prod.controlEstoque !== false) {
               await tx.produto.update({
                 where: { id: item.id },
                 data: {
-                  estoque: Math.max(0, prod.estoque - (item.qty || 1)),
-                  vendas:  prod.vendas + (item.qty || 1),
+                  estoque: Math.max(0, prod.estoque - qty),
+                  vendas:  prod.vendas + qty,
                 },
               });
             }
@@ -109,7 +130,7 @@ router.post('/', async (req, res, next) => {
                 tipo:      'saida',
                 prodId:    item.id,
                 produto:   item.nome || prod.nome,
-                qty:       item.qty  || 1,
+                qty,
                 motivo:    tipo === 'pdv' ? 'Venda PDV' : 'Venda por pedido',
                 operador:  data.operador,
                 empresaId: req.auth.empresaId,

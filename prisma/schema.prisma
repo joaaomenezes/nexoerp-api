@@ -191,6 +191,7 @@ model Pedido {
   obs        String?
   criadoPor  String?
   temBoleto  Boolean  @default(false)
+  historico   Json     @default("[]")
   dataISO    DateTime @default(now())
   dataStr    String?
   validade   String?
