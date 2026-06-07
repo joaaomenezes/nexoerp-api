@@ -101,14 +101,24 @@ function appendEvento(pedido, evento) {
   return [...historicoAtual(pedido), evento];
 }
 
+function itemProdutoId(item) {
+  return item?.id || item?.produtoId || item?.prodId || null;
+}
+
+function itemQty(item) {
+  const qty = Number(item?.qty || item?.quantidade || 1);
+  return qty > 0 ? qty : 1;
+}
+
 async function assertEstoqueDisponivel(tx, itens, empresaId) {
   for (const item of itens) {
-    if (!item.id) continue;
-    const qty = Number(item.qty || 1);
+    const prodId = itemProdutoId(item);
+    if (!prodId) continue;
+    const qty = itemQty(item);
     if (qty <= 0) throw httpError(400, 'Quantidade inválida no pedido.');
 
     const prod = await tx.produto.findFirst({
-      where: { id: item.id, empresaId },
+      where: { id: prodId, empresaId },
     });
     if (!prod || prod.controlEstoque === false || prod.vendaSemEstoque) continue;
     if (prod.estoque < qty) {
@@ -224,25 +234,27 @@ router.put('/:id', async (req, res, next) => {
         const itens = existe.itens || [];
         await assertEstoqueDisponivel(tx, itens, req.auth.empresaId);
         for (const item of itens) {
-          if (!item.id) continue;
+          const prodId = itemProdutoId(item);
+          if (!prodId) continue;
+          const qty = itemQty(item);
           const prod = await tx.produto.findFirst({
-            where: { id: item.id, empresaId: req.auth.empresaId },
+            where: { id: prodId, empresaId: req.auth.empresaId },
           });
           if (prod && prod.controlEstoque !== false) {
             await tx.produto.update({
-              where: { id: item.id },
+              where: { id: prodId },
               data: {
-                estoque: Math.max(0, prod.estoque - (item.qty || 1)),
-                vendas:  prod.vendas + (item.qty || 1),
+                estoque: Math.max(0, prod.estoque - qty),
+                vendas:  prod.vendas + qty,
               },
             });
           }
           await tx.movimentacao.create({
             data: {
               tipo:      'saida',
-              prodId:    item.id,
-              produto:   item.nome || item.id,
-              qty:       item.qty  || 1,
+              prodId,
+              produto:   item.nome || prodId,
+              qty,
               motivo:    `Faturamento pedido ${existe.id}`,
               empresaId: req.auth.empresaId,
             },
@@ -318,25 +330,27 @@ router.put('/:id', async (req, res, next) => {
         const itens = existe.itens || [];
         await assertEstoqueDisponivel(tx, itens, req.auth.empresaId);
         for (const item of itens) {
-          if (!item.id) continue;
+          const prodId = itemProdutoId(item);
+          if (!prodId) continue;
+          const qty = itemQty(item);
           const prod = await tx.produto.findFirst({
-            where: { id: item.id, empresaId: req.auth.empresaId },
+            where: { id: prodId, empresaId: req.auth.empresaId },
           });
           if (prod && prod.controlEstoque !== false) {
             await tx.produto.update({
-              where: { id: item.id },
+              where: { id: prodId },
               data: {
-                estoque: Math.max(0, prod.estoque - (item.qty || 1)),
-                vendas:  prod.vendas + (item.qty || 1),
+                estoque: Math.max(0, prod.estoque - qty),
+                vendas:  prod.vendas + qty,
               },
             });
           }
           await tx.movimentacao.create({
             data: {
               tipo:      'saida',
-              prodId:    item.id,
-              produto:   item.nome || item.id,
-              qty:       item.qty  || 1,
+              prodId,
+              produto:   item.nome || prodId,
+              qty,
               motivo:    `Conclusão pedido ${existe.id}`,
               empresaId: req.auth.empresaId,
             },
@@ -431,22 +445,27 @@ router.delete('/:id', async (req, res, next) => {
         // Reverte estoque
         const itens = existe.itens || [];
         for (const item of itens) {
-          if (!item.id) continue;
+          const prodId = itemProdutoId(item);
+          if (!prodId) continue;
+          const qty = itemQty(item);
           const prod = await tx.produto.findFirst({
-            where: { id: item.id, empresaId: req.auth.empresaId },
+            where: { id: prodId, empresaId: req.auth.empresaId },
           });
           if (prod && prod.controlEstoque !== false) {
-            await tx.produto.update({
-              where: { id: item.id },
-              data: { estoque: prod.estoque + (item.qty || 1) },
+            await tx.produto.updateMany({
+              where: { id: prodId, empresaId: req.auth.empresaId },
+              data: {
+                estoque: { increment: qty },
+                vendas:  Math.max(0, prod.vendas - qty),
+              },
             });
           }
           await tx.movimentacao.create({
             data: {
               tipo:      'entrada',
-              prodId:    item.id,
-              produto:   item.nome || item.id,
-              qty:       item.qty  || 1,
+              prodId,
+              produto:   item.nome || prodId,
+              qty,
               motivo:    `Cancelamento pedido ${existe.id}`,
               empresaId: req.auth.empresaId,
             },
