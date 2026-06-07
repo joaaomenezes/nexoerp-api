@@ -12,7 +12,7 @@ router.use(requirePermission('pedidos'));
 // ── Validação ─────────────────────────────────────────────
 const pedidoSchema = z.object({
   id:         z.string().optional(),
-  status:     z.enum(['orcamento', 'pendente', 'aprovado', 'faturado', 'concluido', 'cancelado']).optional(),
+  status:     z.enum(['pendente', 'faturado', 'concluido', 'cancelado']).optional(),
   cliente:    z.string().optional(),
   clienteId:  z.string().optional(),
   vendedor:   z.string().optional(),
@@ -24,6 +24,8 @@ const pedidoSchema = z.object({
   forma:      z.string().optional(),
   condicao:   z.string().optional(),
   obs:        z.string().optional(),
+  criadoPor:  z.string().optional(),
+  temBoleto:  z.boolean().optional(),
   dataStr:    z.string().optional(),
   validade:   z.string().optional(),
   entrega:    z.string().optional(),
@@ -72,7 +74,7 @@ router.post('/', async (req, res, next) => {
     const data = pedidoSchema.parse(req.body);
     const id = data.id || `PED-${Date.now().toString(36).toUpperCase()}`;
     const pedido = await prisma.pedido.create({
-      data: { ...data, id, itens: data.itens ?? [], empresaId: req.auth.empresaId },
+      data: { ...data, id, itens: data.itens ?? [], empresaId: req.auth.empresaId, criadoPor: data.criadoPor || req.auth.nome || null },
     });
     res.status(201).json({ ok: true, data: pedido });
   } catch (err) { next(err); }
@@ -136,7 +138,7 @@ router.put('/:id', async (req, res, next) => {
           },
         });
 
-        // 3. Cria lançamento de receita (a vencer — será baixado ao concluir)
+        // 3. Cria lançamento de receita (a vencer)
         await tx.lancamento.create({
           data: {
             tipo:      'receita',
@@ -150,6 +152,14 @@ router.put('/:id', async (req, res, next) => {
           },
         });
 
+        // 4. Incrementa contador de pedidos do cliente
+        if (existe.clienteId) {
+          await tx.cliente.updateMany({
+            where: { id: existe.clienteId, empresaId: req.auth.empresaId },
+            data:  { pedidos: { increment: 1 } },
+          });
+        }
+
         await tx.pedido.update({ where: { id: req.params.id }, data });
       });
 
@@ -157,14 +167,77 @@ router.put('/:id', async (req, res, next) => {
       return res.json({ ok: true, data: pedido });
     }
 
-    // Quando concluído: incrementa pedidos do cliente
+    // Quando concluído (sem NF-e): mesma lógica do faturado
     if (data.status === 'concluido' && existe.status !== 'concluido') {
-      if (existe.clienteId) {
-        await prisma.cliente.updateMany({
-          where: { id: existe.clienteId, empresaId: req.auth.empresaId },
-          data:  { pedidos: { increment: 1 } },
+      await prisma.$transaction(async (tx) => {
+        const itens = existe.itens || [];
+        for (const item of itens) {
+          if (!item.id) continue;
+          const prod = await tx.produto.findFirst({
+            where: { id: item.id, empresaId: req.auth.empresaId },
+          });
+          if (prod && prod.controlEstoque !== false) {
+            await tx.produto.update({
+              where: { id: item.id },
+              data: {
+                estoque: Math.max(0, prod.estoque - (item.qty || 1)),
+                vendas:  prod.vendas + (item.qty || 1),
+              },
+            });
+          }
+          await tx.movimentacao.create({
+            data: {
+              tipo:      'saida',
+              prodId:    item.id,
+              produto:   item.nome || item.id,
+              qty:       item.qty  || 1,
+              motivo:    `Conclusão pedido ${existe.id}`,
+              empresaId: req.auth.empresaId,
+            },
+          });
+        }
+
+        await tx.venda.create({
+          data: {
+            id:        `VDA-${Date.now().toString(36).toUpperCase()}`,
+            tipo:      'pedido',
+            cliente:   existe.cliente   || null,
+            clienteId: existe.clienteId || null,
+            itens:     existe.itens     ?? [],
+            subtotal:  existe.subtotal  ?? 0,
+            desconto:  existe.desconto  ?? 0,
+            total:     existe.total     ?? 0,
+            metodo:    existe.forma     || null,
+            status:    'concluida',
+            empresaId: req.auth.empresaId,
+          },
         });
-      }
+
+        await tx.lancamento.create({
+          data: {
+            tipo:      'receita',
+            descricao: `Pedido ${existe.id} — ${existe.cliente || 'sem cliente'}`,
+            valor:     existe.total ?? 0,
+            categoria: 'Vendas',
+            parte:     existe.cliente || null,
+            status:    'avencer',
+            pedidoId:  existe.id,
+            empresaId: req.auth.empresaId,
+          },
+        });
+
+        if (existe.clienteId) {
+          await tx.cliente.updateMany({
+            where: { id: existe.clienteId, empresaId: req.auth.empresaId },
+            data:  { pedidos: { increment: 1 } },
+          });
+        }
+
+        await tx.pedido.update({ where: { id: req.params.id }, data });
+      });
+
+      const pedido = await prisma.pedido.findUnique({ where: { id: req.params.id } });
+      return res.json({ ok: true, data: pedido });
     }
 
     const pedido = await prisma.pedido.update({ where: { id: req.params.id }, data });
@@ -173,7 +246,7 @@ router.put('/:id', async (req, res, next) => {
 });
 
 // ── DELETE /api/pedidos/:id ───────────────────────────────
-// Cancela o pedido. Se estava faturado/concluído: reverte estoque e estorna lancamento
+// Pendente → exclui permanentemente. Faturado/concluído → cancela e reverte estoque.
 router.delete('/:id', async (req, res, next) => {
   try {
     const existe = await prisma.pedido.findFirst({
@@ -181,6 +254,12 @@ router.delete('/:id', async (req, res, next) => {
     });
     if (!existe) return res.status(404).json({ ok: false, message: 'Pedido não encontrado.' });
     if (existe.status === 'cancelado') return res.json({ ok: true, message: 'Pedido já cancelado.' });
+
+    // Pedido pendente: exclusão permanente
+    if (existe.status === 'pendente') {
+      await prisma.pedido.delete({ where: { id: req.params.id } });
+      return res.json({ ok: true, deleted: true, message: 'Pedido excluído.' });
+    }
 
     const eraFaturado = ['faturado', 'concluido'].includes(existe.status);
 

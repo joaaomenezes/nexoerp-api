@@ -177,7 +177,7 @@ model Vendedor {
 // ─── PEDIDO ──────────────────────────────────────────────
 model Pedido {
   id         String   @id
-  status     String   @default("orcamento")
+  status     String   @default("pendente")
   cliente    String?
   clienteId  String?
   vendedor   String?
@@ -189,6 +189,8 @@ model Pedido {
   forma      String?
   condicao   String?
   obs        String?
+  criadoPor  String?
+  temBoleto  Boolean  @default(false)
   dataISO    DateTime @default(now())
   dataStr    String?
   validade   String?
