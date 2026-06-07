@@ -60,7 +60,6 @@ router.get('/posicao', async (req, res, next) => {
 
     const where = {
       empresaId: req.auth.empresaId,
-      status: 'ativo',
       ...(deposito && { deposito }),
       ...(q && {
         OR: [
@@ -76,14 +75,15 @@ router.get('/posicao', async (req, res, next) => {
         id: true, sku: true, nome: true, estoque: true,
         estoqueMin: true, estoqueMax: true, deposito: true,
         unidade: true, cor: true, emoji: true,
+        status: true, ultimaEntrada: true, custo: true, fornecedor: true,
       },
       orderBy: { nome: 'asc' },
     });
 
-    // Adiciona flag de alerta
+    // Adiciona flag de alerta (só ativos)
     const data = produtos.map(p => ({
       ...p,
-      alerta: p.estoqueMin > 0 && p.estoque <= p.estoqueMin,
+      alerta: p.status === 'ativo' && p.estoqueMin > 0 && p.estoque <= p.estoqueMin,
     }));
 
     res.json({ ok: true, data });
