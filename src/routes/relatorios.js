@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const { PrismaClient } = require('@prisma/client');
 const { requireAuth, requirePermission } = require('../middleware/auth');
+const { findManyPaginated, sendList } = require('../utils/pagination');
 
 const prisma = new PrismaClient();
 
@@ -23,12 +24,12 @@ function toView(h) {
 // ── GET /api/relatorios/historico — histórico de relatórios gerados ──
 router.get('/historico', async (req, res, next) => {
   try {
-    const historico = await prisma.historicoRelatorio.findMany({
+    const result = await findManyPaginated(prisma.historicoRelatorio, req.query, {
       where:   { empresaId: req.auth.empresaId },
       orderBy: { criadoEm: 'desc' },
       take:    50,
     });
-    res.json({ ok: true, data: historico.map(toView) });
+    sendList(res, { ...result, data: result.data.map(toView) });
   } catch (err) {
     next(err);
   }

@@ -3,6 +3,7 @@ const { z }  = require('zod');
 const { PrismaClient } = require('@prisma/client');
 
 const { requireAuth, requirePermission } = require('../middleware/auth');
+const { findManyPaginated, sendList } = require('../utils/pagination');
 
 const prisma = new PrismaClient();
 
@@ -61,12 +62,12 @@ router.get('/', async (req, res, next) => {
       }),
     };
 
-    const vendas = await prisma.venda.findMany({
+    const result = await findManyPaginated(prisma.venda, req.query, {
       where,
       orderBy: { dataISO: 'desc' },
     });
 
-    res.json({ ok: true, data: vendas });
+    sendList(res, result);
   } catch (err) {
     next(err);
   }

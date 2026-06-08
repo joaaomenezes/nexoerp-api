@@ -4,6 +4,7 @@ const { z }   = require('zod');
 const { PrismaClient } = require('@prisma/client');
 
 const { requireAuth } = require('../middleware/auth');
+const { findManyPaginated, sendList } = require('../utils/pagination');
 
 const prisma = new PrismaClient();
 
@@ -26,7 +27,7 @@ const ALL_MODULES = [
 // Lista todos os usuários da empresa (sem passwordHash)
 router.get('/', async (req, res, next) => {
   try {
-    const usuarios = await prisma.usuario.findMany({
+    const result = await findManyPaginated(prisma.usuario, req.query, {
       where:   { empresaId: req.auth.empresaId },
       orderBy: { criadoEm: 'asc' },
       select: {
@@ -40,7 +41,7 @@ router.get('/', async (req, res, next) => {
       },
     });
 
-    res.json({ ok: true, data: usuarios });
+    sendList(res, result);
   } catch (err) {
     next(err);
   }

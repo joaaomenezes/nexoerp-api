@@ -3,6 +3,7 @@ const { z }  = require('zod');
 const { PrismaClient } = require('@prisma/client');
 
 const { requireAuth, requirePermission } = require('../middleware/auth');
+const { findManyPaginated, sendList } = require('../utils/pagination');
 
 const prisma = new PrismaClient();
 
@@ -51,32 +52,75 @@ const produtoSchema = z.object({
   imagem:          z.string().nullish(),
 });
 
+const SORT_FIELDS = new Set(['nome', 'sku', 'cat', 'preco', 'estoque', 'criadoEm', 'atualizadoEm']);
+
+function buildProdutoWhere(req) {
+  const { q, status, cat, deposito, estoqueStatus, stock } = req.query;
+  const search = typeof q === 'string' ? q.trim() : '';
+  const stockFilter = estoqueStatus || stock;
+
+  const where = {
+    empresaId: req.auth.empresaId,
+  };
+
+  if (status === 'ativo' || status === 'inativo') where.status = status;
+  if (cat) where.cat = String(cat);
+  if (deposito) where.deposito = String(deposito);
+  if (stockFilter === 'baixo') where.estoque = { gt: 0, lte: prisma.produto.fields.estoqueMin };
+  if (stockFilter === 'zerado') where.estoque = 0;
+  if (search) {
+    where.OR = [
+      { nome:  { contains: search, mode: 'insensitive' } },
+      { sku:   { contains: search, mode: 'insensitive' } },
+      { ean:   { contains: search, mode: 'insensitive' } },
+      { cat:   { contains: search, mode: 'insensitive' } },
+      { marca: { contains: search, mode: 'insensitive' } },
+    ];
+  }
+
+  return where;
+}
+
+function buildProdutoOrderBy(query) {
+  const sortBy = typeof query.sortBy === 'string' ? query.sortBy : '';
+  const sortDir = query.sortDir === 'desc' ? 'desc' : 'asc';
+
+  if (!SORT_FIELDS.has(sortBy)) return { nome: 'asc' };
+  return { [sortBy]: sortDir };
+}
+
 // ── GET /api/produtos ─────────────────────────────────────
 // Lista todos os produtos da empresa com suporte a busca e filtros
 router.get('/', async (req, res, next) => {
   try {
-    const { q, status, cat, deposito } = req.query;
-
-    const where = {
-      empresaId: req.auth.empresaId,
-      ...(status  && { status }),
-      ...(cat     && { cat }),
-      ...(deposito && { deposito }),
-      ...(q && {
-        OR: [
-          { nome:  { contains: q, mode: 'insensitive' } },
-          { sku:   { contains: q, mode: 'insensitive' } },
-          { marca: { contains: q, mode: 'insensitive' } },
-        ],
-      }),
-    };
-
-    const produtos = await prisma.produto.findMany({
-      where,
-      orderBy: { nome: 'asc' },
+    const result = await findManyPaginated(prisma.produto, req.query, {
+      where: buildProdutoWhere(req),
+      orderBy: buildProdutoOrderBy(req.query),
     });
 
-    res.json({ ok: true, data: produtos });
+    sendList(res, result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/resumo', async (req, res, next) => {
+  try {
+    const produtos = await prisma.produto.findMany({
+      where: { empresaId: req.auth.empresaId },
+      select: { status: true, estoque: true, estoqueMin: true, custo: true },
+    });
+
+    const resumo = produtos.reduce((acc, p) => {
+      acc.total += 1;
+      if (p.status === 'ativo') acc.ativos += 1;
+      if (p.estoque > 0 && p.estoque <= p.estoqueMin) acc.baixo += 1;
+      if (p.estoque === 0) acc.zerado += 1;
+      acc.valorEstoque += p.estoque * (p.custo || 0);
+      return acc;
+    }, { total: 0, ativos: 0, baixo: 0, zerado: 0, valorEstoque: 0 });
+
+    res.json({ ok: true, data: resumo });
   } catch (err) {
     next(err);
   }

@@ -3,6 +3,7 @@ const { z }  = require('zod');
 const { PrismaClient } = require('@prisma/client');
 
 const { requireAuth, requirePermission } = require('../middleware/auth');
+const { findManyPaginated, sendList } = require('../utils/pagination');
 
 const prisma = new PrismaClient();
 
@@ -12,11 +13,11 @@ router.use(requirePermission('produtos'));
 // ── GET /api/categorias ───────────────────────────────────
 router.get('/', async (req, res, next) => {
   try {
-    const categorias = await prisma.categoria.findMany({
+    const result = await findManyPaginated(prisma.categoria, req.query, {
       where:   { empresaId: req.auth.empresaId },
       orderBy: { nome: 'asc' },
     });
-    res.json({ ok: true, data: categorias });
+    sendList(res, result);
   } catch (err) {
     next(err);
   }

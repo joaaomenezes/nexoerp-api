@@ -3,11 +3,46 @@ const { z }  = require('zod');
 const { PrismaClient } = require('@prisma/client');
 
 const { requireAuth, requirePermission } = require('../middleware/auth');
+const { findManyPaginated, sendList } = require('../utils/pagination');
 
 const prisma = new PrismaClient();
 
 router.use(requireAuth);
 router.use(requirePermission('clientes'));
+
+const SORT_FIELDS = new Set(['nome', 'tipo', 'cidade', 'status', 'cadastro', 'compras', 'pedidos', 'criadoEm', 'atualizadoEm']);
+
+function buildClienteWhere(req) {
+  const { q, status, secao, tipo } = req.query;
+  const search = typeof q === 'string' ? q.trim() : '';
+
+  const where = {
+    empresaId: req.auth.empresaId,
+  };
+
+  if (status === 'ativo' || status === 'inativo' || status === 'bloq') where.status = status;
+  if (secao === 'clientes' || secao === 'fornecedores') where.secao = secao;
+  if (tipo === 'pf' || tipo === 'pj' || tipo === 'mei') where.tipo = tipo;
+  if (search) {
+    where.OR = [
+      { nome:  { contains: search, mode: 'insensitive' } },
+      { doc:   { contains: search, mode: 'insensitive' } },
+      { email: { contains: search, mode: 'insensitive' } },
+      { tel:   { contains: search, mode: 'insensitive' } },
+      { cidade:{ contains: search, mode: 'insensitive' } },
+    ];
+  }
+
+  return where;
+}
+
+function buildClienteOrderBy(query) {
+  const sortBy = typeof query.sortBy === 'string' ? query.sortBy : '';
+  const sortDir = query.sortDir === 'desc' ? 'desc' : 'asc';
+
+  if (!SORT_FIELDS.has(sortBy)) return { nome: 'asc' };
+  return { [sortBy]: sortDir };
+}
 
 // ── Validação ─────────────────────────────────────────────
 const clienteSchema = z.object({
@@ -47,28 +82,43 @@ const clienteSchema = z.object({
 // Aceita ?secao=clientes|fornecedores, ?q=busca, ?status=ativo|inativo
 router.get('/', async (req, res, next) => {
   try {
-    const { q, status, secao } = req.query;
-
-    const where = {
-      empresaId: req.auth.empresaId,
-      ...(status && { status }),
-      ...(secao  && { secao }),
-      ...(q && {
-        OR: [
-          { nome:  { contains: q, mode: 'insensitive' } },
-          { doc:   { contains: q, mode: 'insensitive' } },
-          { email: { contains: q, mode: 'insensitive' } },
-          { tel:   { contains: q, mode: 'insensitive' } },
-        ],
-      }),
-    };
-
-    const clientes = await prisma.cliente.findMany({
-      where,
-      orderBy: { nome: 'asc' },
+    const result = await findManyPaginated(prisma.cliente, req.query, {
+      where: buildClienteWhere(req),
+      orderBy: buildClienteOrderBy(req.query),
     });
 
-    res.json({ ok: true, data: clientes });
+    sendList(res, result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/resumo', async (req, res, next) => {
+  try {
+    const { secao } = req.query;
+    const where = {
+      empresaId: req.auth.empresaId,
+      ...(secao === 'clientes' || secao === 'fornecedores' ? { secao } : {}),
+    };
+
+    const itens = await prisma.cliente.findMany({
+      where,
+      select: { status: true, cadastro: true },
+    });
+
+    const now = new Date();
+    const mes = String(now.getMonth() + 1).padStart(2, '0');
+    const ano = String(now.getFullYear());
+    const resumo = itens.reduce((acc, item) => {
+      acc.total += 1;
+      if (item.status === 'ativo') acc.ativos += 1;
+      if (item.status === 'inativo' || item.status === 'bloq') acc.inativos += 1;
+      const p = (item.cadastro || '').split('/');
+      if (p[1] === mes && p[2] === ano) acc.mes += 1;
+      return acc;
+    }, { total: 0, ativos: 0, inativos: 0, mes: 0 });
+
+    res.json({ ok: true, data: resumo });
   } catch (err) {
     next(err);
   }

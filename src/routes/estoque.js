@@ -3,6 +3,7 @@ const { z }  = require('zod');
 const { PrismaClient } = require('@prisma/client');
 
 const { requireAuth, requirePermission } = require('../middleware/auth');
+const { findManyPaginated, sendList } = require('../utils/pagination');
 
 const prisma = new PrismaClient();
 
@@ -41,12 +42,12 @@ router.get('/movimentacoes', async (req, res, next) => {
       }),
     };
 
-    const movimentacoes = await prisma.movimentacao.findMany({
+    const result = await findManyPaginated(prisma.movimentacao, req.query, {
       where,
       orderBy: { dataISO: 'desc' },
     });
 
-    res.json({ ok: true, data: movimentacoes });
+    sendList(res, result);
   } catch (err) {
     next(err);
   }
@@ -69,7 +70,7 @@ router.get('/posicao', async (req, res, next) => {
       }),
     };
 
-    const produtos = await prisma.produto.findMany({
+    const result = await findManyPaginated(prisma.produto, req.query, {
       where,
       select: {
         id: true, sku: true, nome: true, estoque: true,
@@ -81,12 +82,12 @@ router.get('/posicao', async (req, res, next) => {
     });
 
     // Adiciona flag de alerta (só ativos)
-    const data = produtos.map(p => ({
+    const data = result.data.map(p => ({
       ...p,
       alerta: p.status === 'ativo' && p.estoqueMin > 0 && p.estoque <= p.estoqueMin,
     }));
 
-    res.json({ ok: true, data });
+    sendList(res, { ...result, data });
   } catch (err) {
     next(err);
   }
@@ -138,11 +139,11 @@ router.post('/movimentacoes', async (req, res, next) => {
 // ── GET /api/estoque/depositos ────────────────────────────
 router.get('/depositos', async (req, res, next) => {
   try {
-    const depositos = await prisma.deposito.findMany({
+    const result = await findManyPaginated(prisma.deposito, req.query, {
       where:   { empresaId: req.auth.empresaId, ativo: true },
       orderBy: { nome: 'asc' },
     });
-    res.json({ ok: true, data: depositos });
+    sendList(res, result);
   } catch (err) {
     next(err);
   }
