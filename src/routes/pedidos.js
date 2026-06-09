@@ -25,7 +25,7 @@ const pedidoItemSchema = z.object({
 
 const pedidoSchema = z.object({
   id:         z.string().optional(),
-  status:     z.enum(['pendente', 'faturado', 'concluido', 'cancelado']).optional(),
+  status:     z.enum(['pendente', 'faturado', 'concluido', 'estornado', 'cancelado']).optional(),
   cliente:    z.string().optional(),
   clienteId:  z.string().optional(),
   vendedor:   z.string().optional(),
@@ -129,24 +129,54 @@ async function assertEstoqueDisponivel(tx, itens, empresaId) {
 }
 
 // ── GET /api/pedidos ──────────────────────────────────────
+function buildPedidoWhere(req) {
+  const { status, clienteId, q, condicao } = req.query;
+
+  return {
+    empresaId: req.auth.empresaId,
+    ...(status && status !== 'todos' && { status }),
+    ...(clienteId && { clienteId }),
+    ...(condicao && { condicao }),
+    ...(q && {
+      OR: [
+        { id:      { contains: q, mode: 'insensitive' } },
+        { cliente: { contains: q, mode: 'insensitive' } },
+      ],
+    }),
+  };
+}
+
 router.get('/', async (req, res, next) => {
   try {
-    const { status, clienteId, q } = req.query;
-
-    const where = {
-      empresaId: req.auth.empresaId,
-      ...(status    && { status }),
-      ...(clienteId && { clienteId }),
-      ...(q && {
-        OR: [
-          { id:      { contains: q, mode: 'insensitive' } },
-          { cliente: { contains: q, mode: 'insensitive' } },
-        ],
-      }),
-    };
-
+    const where = buildPedidoWhere(req);
     const result = await findManyPaginated(prisma.pedido, req.query, { where, orderBy: { dataISO: 'desc' } });
     sendList(res, result);
+  } catch (err) { next(err); }
+});
+
+router.get('/resumo', async (req, res, next) => {
+  try {
+    const itens = await prisma.pedido.findMany({
+      where: { empresaId: req.auth.empresaId },
+      select: { status: true, total: true },
+    });
+
+    const statusCounts = { pendente: 0, concluido: 0, faturado: 0, estornado: 0, cancelado: 0 };
+    const resumo = itens.reduce((acc, pedido) => {
+      acc.total += 1;
+      if (statusCounts[pedido.status] !== undefined) statusCounts[pedido.status] += 1;
+      if (pedido.status === 'pendente') {
+        acc.pendentes += 1;
+        acc.aReceber += pedido.total || 0;
+      }
+      if (pedido.status === 'faturado' || pedido.status === 'concluido') {
+        acc.faturados += 1;
+        acc.faturamento += pedido.total || 0;
+      }
+      return acc;
+    }, { total: 0, pendentes: 0, faturados: 0, faturamento: 0, aReceber: 0 });
+
+    res.json({ ok: true, data: { ...resumo, statusCounts } });
   } catch (err) { next(err); }
 });
 
@@ -278,7 +308,8 @@ router.put('/:id', async (req, res, next) => {
             desconto:  existe.desconto  ?? 0,
             total:     existe.total     ?? 0,
             metodo:    existe.forma     || null,
-            status:    'concluida',
+            status:    'faturada',
+            pedidoId:  existe.id,
             dataStr:   agora.toLocaleDateString('pt-BR'),
             horaStr:   agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
             empresaId: req.auth.empresaId,
@@ -374,6 +405,7 @@ router.put('/:id', async (req, res, next) => {
             total:     existe.total     ?? 0,
             metodo:    existe.forma     || null,
             status:    'concluida',
+            pedidoId:  existe.id,
             dataStr:   agora.toLocaleDateString('pt-BR'),
             horaStr:   agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
             empresaId: req.auth.empresaId,
@@ -424,7 +456,7 @@ router.put('/:id', async (req, res, next) => {
 });
 
 // ── DELETE /api/pedidos/:id ───────────────────────────────
-// Pendente → exclui permanentemente. Faturado/concluído → cancela e reverte estoque.
+// Pendente → exclui permanentemente. Faturado → cancela. Concluído → estorna.
 router.delete('/:id', async (req, res, next) => {
   try {
     const existe = await prisma.pedido.findFirst({
@@ -432,6 +464,7 @@ router.delete('/:id', async (req, res, next) => {
     });
     if (!existe) return res.status(404).json({ ok: false, message: 'Pedido não encontrado.' });
     if (existe.status === 'cancelado') return res.json({ ok: true, message: 'Pedido já cancelado.' });
+    if (existe.status === 'estornado') return res.json({ ok: true, message: 'Pedido já estornado.' });
 
     // Pedido pendente: exclusão permanente
     if (existe.status === 'pendente') {
@@ -440,6 +473,13 @@ router.delete('/:id', async (req, res, next) => {
     }
 
     const eraFaturado = ['faturado', 'concluido'].includes(existe.status);
+    const statusFinal = existe.status === 'concluido' ? 'estornado' : 'cancelado';
+    const eventoFinal = statusFinal === 'estornado'
+      ? novoEvento('pedido_estornado', 'Venda estornada', req)
+      : novoEvento('pedido_cancelado', 'Pedido cancelado', req);
+    const motivoFinal = statusFinal === 'estornado'
+      ? `Estorno pedido ${existe.id}`
+      : `Cancelamento pedido ${existe.id}`;
 
     await prisma.$transaction(async (tx) => {
       if (eraFaturado) {
@@ -467,7 +507,7 @@ router.delete('/:id', async (req, res, next) => {
               prodId,
               produto:   item.nome || prodId,
               qty,
-              motivo:    `Cancelamento pedido ${existe.id}`,
+              motivo:    motivoFinal,
               empresaId: req.auth.empresaId,
             },
           });
@@ -483,7 +523,7 @@ router.delete('/:id', async (req, res, next) => {
         if (vendaIds.length) {
           await tx.venda.updateMany({
             where: { id: { in: vendaIds }, empresaId: req.auth.empresaId },
-            data: { status: 'estornada', estornoMotivo: `Cancelamento pedido ${existe.id}` },
+            data: { status: statusFinal === 'cancelado' ? 'cancelada' : 'estornada', estornoMotivo: motivoFinal },
           });
         }
 
@@ -496,13 +536,13 @@ router.delete('/:id', async (req, res, next) => {
       await tx.pedido.update({
         where: { id: req.params.id },
         data: {
-          status: 'cancelado',
-          historico: appendEvento(existe, novoEvento('pedido_cancelado', 'Pedido cancelado', req)),
+          status: statusFinal,
+          historico: appendEvento(existe, eventoFinal),
         },
       });
     });
 
-    res.json({ ok: true, message: 'Pedido cancelado.' });
+    res.json({ ok: true, message: statusFinal === 'estornado' ? 'Pedido estornado.' : 'Pedido cancelado.' });
   } catch (err) { next(err); }
 });
 

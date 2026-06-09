@@ -19,24 +19,25 @@ model Empresa {
   funcionarios String?
   criadoEm     DateTime @default(now())
 
-  usuarios             Usuario[]
-  produtos             Produto[]
-  clientes             Cliente[]
-  vendedores           Vendedor[]
-  pedidos              Pedido[]
-  vendas               Venda[]
-  lancamentos          Lancamento[]
-  movimentacoes        Movimentacao[]
-  depositos            Deposito[]
-  categorias           Categoria[]
+  usuarios              Usuario[]
+  produtos              Produto[]
+  clientes              Cliente[]
+  fornecedores          Fornecedor[]
+  vendedores            Vendedor[]
+  pedidos               Pedido[]
+  vendas                Venda[]
+  lancamentos           Lancamento[]
+  movimentacoes         Movimentacao[]
+  depositos             Deposito[]
+  categorias            Categoria[]
   categoriasFinanceiras CategoriaFinanceira[]
-  caixas               Caixa[]
-  custos               Custo[]
-  carrinhosSuspensos   CarrinhoSuspenso[]
-  historicoRelatorios  HistoricoRelatorio[]
-  configuracao         Configuracao?
-  configuracaoPDV      ConfiguracaoPDV?
-  catalogoConfig       CatalogoConfig?
+  caixas                Caixa[]
+  custos                Custo[]
+  carrinhosSuspensos    CarrinhoSuspenso[]
+  historicoRelatorios   HistoricoRelatorio[]
+  configuracao          Configuracao?
+  configuracaoPDV       ConfiguracaoPDV?
+  catalogoConfig        CatalogoConfig?
 
   @@map("empresas")
 }
@@ -62,25 +63,25 @@ model Usuario {
 
 // ─── PRODUTO ─────────────────────────────────────────────
 model Produto {
-  id             String   @id @default(cuid())
-  sku            String
-  nome           String
-  cat            String?
-  marca          String?
-  unidade        String   @default("un")
-  descricao      String?
-  preco          Float    @default(0)
-  custo          Float    @default(0)
-  estoque        Int      @default(0)
-  estoqueMin     Int      @default(0)
-  estoqueMax     Int      @default(0)
-  status         String   @default("ativo")
-  emoji          String   @default("📦")
-  cor            String   @default("#00c896")
-  vendas         Int      @default(0)
-  destaque       Boolean  @default(false)
-  exibirPdv      Boolean  @default(true)
-  controlEstoque Boolean  @default(true)
+  id              String   @id @default(cuid())
+  sku             String
+  nome            String
+  cat             String?
+  marca           String?
+  unidade         String   @default("un")
+  descricao       String?
+  preco           Float    @default(0)
+  custo           Float    @default(0)
+  estoque         Int      @default(0)
+  estoqueMin      Int      @default(0)
+  estoqueMax      Int      @default(0)
+  status          String   @default("ativo")
+  emoji           String   @default("📦")
+  cor             String   @default("#00c896")
+  vendas          Int      @default(0)
+  destaque        Boolean  @default(false)
+  exibirPdv       Boolean  @default(true)
+  controlEstoque  Boolean  @default(true)
   deposito        String?
   posicao         String?
   fornecedor      String?
@@ -113,12 +114,12 @@ model Produto {
 }
 
 // ─── CLIENTE / FORNECEDOR ────────────────────────────────
-// Campo `secao` distingue: "clientes" | "fornecedores"
+// Campo mantido por compatibilidade; novos fornecedores usam a tabela `fornecedores`.
 model Cliente {
-  id          String  @id @default(cuid())
+  id          String   @id @default(cuid())
   nome        String
-  tipo        String  @default("pf")       // pf | pj
-  secao       String  @default("clientes") // clientes | fornecedores
+  tipo        String   @default("pf") // pf | pj
+  secao       String   @default("clientes")
   doc         String? // CPF ou CNPJ
   rg          String?
   nascimento  String?
@@ -134,11 +135,11 @@ model Cliente {
   bairro      String?
   cidade      String?
   estado      String?
-  pais        String? @default("Brasil")
-  status      String  @default("ativo")
-  compras     Int     @default(0)
-  pedidos     Int     @default(0)
-  limite      Float   @default(0)
+  pais        String?  @default("Brasil")
+  status      String   @default("ativo")
+  compras     Int      @default(0)
+  pedidos     Int      @default(0)
+  limite      Float    @default(0)
   desconto    String?
   condicao    String?
   vendedor    String? // nome do vendedor responsável
@@ -156,15 +157,55 @@ model Cliente {
   @@map("clientes")
 }
 
+// ─── FORNECEDOR ──────────────────────────────────────────
+model Fornecedor {
+  id           String   @id @default(cuid())
+  nome         String
+  tipo         String   @default("pj") // pf | pj | mei
+  doc          String?
+  rg           String?
+  nascimento   String?
+  genero       String?
+  tel          String?
+  tel2         String?
+  email        String?
+  site         String?
+  cep          String?
+  logradouro   String?
+  numero       String?
+  complemento  String?
+  bairro       String?
+  cidade       String?
+  estado       String?
+  pais         String?  @default("Brasil")
+  status       String   @default("ativo")
+  pedidos      Int      @default(0)
+  limite       Float    @default(0)
+  desconto     String?
+  condicao     String?
+  grupo        String?
+  origem       String?
+  tags         String?
+  obs          String?
+  cadastro     String?
+  criadoEm     DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  empresaId String
+
+  @@map("fornecedores")
+}
+
 // ─── VENDEDOR ────────────────────────────────────────────
 model Vendedor {
-  id       String  @id @default(cuid())
+  id       String   @id @default(cuid())
   nome     String
-  tipo     String  @default("pf") // pf | pj
+  tipo     String   @default("pf") // pf | pj
   doc      String? // CPF ou CNPJ
   tel      String?
   email    String?
-  status   String  @default("ativo")
+  status   String   @default("ativo")
   cadastro String?
   criadoEm DateTime @default(now())
 
@@ -191,7 +232,7 @@ model Pedido {
   obs        String?
   criadoPor  String?
   temBoleto  Boolean  @default(false)
-  historico   Json     @default("[]")
+  historico  Json     @default("[]")
   dataISO    DateTime @default(now())
   dataStr    String?
   validade   String?
@@ -221,6 +262,7 @@ model Venda {
   total         Float    @default(0)
   status        String   @default("concluida")
   tipo          String   @default("pdv") // pdv | pedido
+  pedidoId      String?
   estornoMotivo String?
   dataISO       DateTime @default(now())
   dataStr       String?
@@ -235,7 +277,7 @@ model Venda {
 // ─── LANÇAMENTO FINANCEIRO ───────────────────────────────
 model Lancamento {
   id             String   @id @default(cuid())
-  tipo           String   // receita | despesa
+  tipo           String // receita | despesa
   descricao      String
   valor          Float
   vencimento     String?
@@ -245,8 +287,8 @@ model Lancamento {
   obs            String?
   pagoEm         String?
   formaPagamento String?
-  vendaId        String?  // referência à venda que gerou este lançamento
-  pedidoId       String?  // referência ao pedido que gerou este lançamento
+  vendaId        String? // referência à venda que gerou este lançamento
+  pedidoId       String? // referência ao pedido que gerou este lançamento
   criadoEm       DateTime @default(now())
 
   empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
@@ -258,7 +300,7 @@ model Lancamento {
 // ─── MOVIMENTAÇÃO DE ESTOQUE ─────────────────────────────
 model Movimentacao {
   id       String   @id @default(cuid())
-  tipo     String   // entrada | saida | ajuste | transferencia
+  tipo     String // entrada | saida | ajuste | transferencia
   prodId   String?
   produto  String
   qty      Float
@@ -277,13 +319,13 @@ model Movimentacao {
 
 // ─── DEPÓSITO ────────────────────────────────────────────
 model Deposito {
-  id       String  @id @default(cuid())
+  id       String   @id @default(cuid())
   nome     String
   tipo     String?
   endereco String?
-  icone    String? @default("🏭")
-  cor      String? @default("var(--accent)")
-  ativo    Boolean @default(true)
+  icone    String?  @default("🏭")
+  cor      String?  @default("var(--accent)")
+  ativo    Boolean  @default(true)
   criadoEm DateTime @default(now())
 
   empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
@@ -294,7 +336,7 @@ model Deposito {
 
 // ─── CATEGORIA DE PRODUTO ────────────────────────────────
 model Categoria {
-  id       String  @id @default(cuid())
+  id       String   @id @default(cuid())
   nome     String
   tipo     String?
   criadoEm DateTime @default(now())
@@ -307,9 +349,9 @@ model Categoria {
 
 // ─── CATEGORIA FINANCEIRA (centro de custos/despesas) ────
 model CategoriaFinanceira {
-  id       String  @id @default(cuid())
+  id       String   @id @default(cuid())
   nome     String
-  tipo     String  // custo | despesa
+  tipo     String // custo | despesa
   cor      String?
   criadoEm DateTime @default(now())
 
@@ -349,7 +391,7 @@ model Custo {
   tipo          String   @default("custo") // custo | despesa
   fornecedor    String?
   obs           String?
-  recorrenciaId String?  // grupos de entradas recorrentes
+  recorrenciaId String? // grupos de entradas recorrentes
   criadoEm      DateTime @default(now())
 
   empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)

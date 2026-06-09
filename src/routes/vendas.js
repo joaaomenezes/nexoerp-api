@@ -31,8 +31,9 @@ const vendaSchema = z.object({
   subtotal:      z.number().min(0).optional(),
   desconto:      z.number().min(0).optional(),
   total:         z.number().min(0).optional(),
-  status:        z.enum(['concluida', 'cancelada', 'estornada']).optional(),
+  status:        z.enum(['concluida', 'faturada', 'cancelada', 'estornada']).optional(),
   tipo:          z.enum(['pdv', 'pedido']).optional(),
+  pedidoId:      z.string().optional(),
   estornoMotivo: z.string().optional(),
   dataStr:       z.string().optional(),
   horaStr:       z.string().optional(),
@@ -44,30 +45,100 @@ function httpError(status, message) {
   return err;
 }
 
+function buildVendaWhere(req) {
+  const { status, tipo, q, operadorId, metodo, dataInicio, dataFim } = req.query;
+  const where = {
+    empresaId: req.auth.empresaId,
+    ...(status && status !== 'todos' && { status }),
+    ...(tipo && { tipo }),
+    ...(operadorId && { operadorId }),
+  };
+
+  if (q) {
+    where.OR = [
+      { id:      { contains: q, mode: 'insensitive' } },
+      { pedidoId: { contains: q, mode: 'insensitive' } },
+      { cliente: { contains: q, mode: 'insensitive' } },
+    ];
+  }
+
+  if (metodo) {
+    const metodoBusca = String(metodo).toLowerCase();
+    if (['dinheiro', 'pix', 'credito', 'debito', 'multiplo'].includes(metodoBusca)) {
+      where.metodo = { equals: metodoBusca, mode: 'insensitive' };
+    } else {
+      const aliases = {
+        boleto: ['boleto'],
+        duplicata: ['duplicata'],
+        transferencia: ['transfer', 'pix'],
+        cheque: ['cheque'],
+      }[metodoBusca] || [metodoBusca];
+
+      const metodoOr = aliases.map(alias => ({ metodo: { contains: alias, mode: 'insensitive' } }));
+      if (where.OR) {
+        where.AND = [{ OR: where.OR }, { OR: metodoOr }];
+        delete where.OR;
+      } else {
+        where.OR = metodoOr;
+      }
+    }
+  }
+
+  if (dataInicio || dataFim) {
+    where.dataISO = {};
+    if (dataInicio) where.dataISO.gte = new Date(`${dataInicio}T00:00:00`);
+    if (dataFim) where.dataISO.lte = new Date(`${dataFim}T23:59:59`);
+  }
+
+  return where;
+}
+
+function buildVendaOrderBy(query) {
+  const sortMap = {
+    id: 'id',
+    pedidoId: 'pedidoId',
+    cliente: 'cliente',
+    total: 'total',
+    data: 'dataISO',
+    dataISO: 'dataISO',
+  };
+  const sortBy = sortMap[query.sortBy] || 'dataISO';
+  const sortDir = query.sortDir === 'asc' ? 'asc' : 'desc';
+  return { [sortBy]: sortDir };
+}
+
 // ── GET /api/vendas ───────────────────────────────────────
 router.get('/', async (req, res, next) => {
   try {
-    const { status, tipo, q, operadorId } = req.query;
-
-    const where = {
-      empresaId: req.auth.empresaId,
-      ...(status     && { status }),
-      ...(tipo       && { tipo }),
-      ...(operadorId && { operadorId }),
-      ...(q && {
-        OR: [
-          { id:      { contains: q, mode: 'insensitive' } },
-          { cliente: { contains: q, mode: 'insensitive' } },
-        ],
-      }),
-    };
-
     const result = await findManyPaginated(prisma.venda, req.query, {
-      where,
-      orderBy: { dataISO: 'desc' },
+      where: buildVendaWhere(req),
+      orderBy: buildVendaOrderBy(req.query),
     });
 
     sendList(res, result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/resumo', async (req, res, next) => {
+  try {
+    const vendas = await prisma.venda.findMany({
+      where: buildVendaWhere(req),
+      select: { status: true, total: true },
+    });
+
+    const resumo = vendas.reduce((acc, venda) => {
+      if (venda.status === 'concluida' || venda.status === 'faturada') {
+        acc.concluidas += 1;
+        acc.faturamento += venda.total || 0;
+      }
+      if (venda.status === 'estornada') acc.estornos += 1;
+      return acc;
+    }, { concluidas: 0, faturamento: 0, estornos: 0 });
+
+    resumo.ticketMedio = resumo.concluidas ? resumo.faturamento / resumo.concluidas : 0;
+    res.json({ ok: true, data: resumo });
   } catch (err) {
     next(err);
   }
@@ -193,7 +264,7 @@ router.put('/:id', async (req, res, next) => {
     const data = vendaSchema.partial().parse(req.body);
 
     // Estorno: devolve estoque + marca lançamento original como estornado
-    if (data.status === 'estornada' && existe.status === 'concluida') {
+    if (data.status === 'estornada' && (existe.status === 'concluida' || existe.status === 'faturada')) {
       await prisma.$transaction(async (tx) => {
         const itens = existe.itens || [];
 

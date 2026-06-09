@@ -10,15 +10,14 @@ const prisma = new PrismaClient();
 router.use(requireAuth);
 router.use(requirePermission('clientes'));
 
-const SORT_FIELDS = new Set(['nome', 'tipo', 'cidade', 'status', 'cadastro', 'compras', 'pedidos', 'criadoEm', 'atualizadoEm']);
+const SORT_FIELDS = new Set(['nome', 'tipo', 'cidade', 'status', 'cadastro', 'pedidos', 'criadoEm', 'atualizadoEm']);
 
-function buildClienteWhere(req) {
+function buildFornecedorWhere(req) {
   const { q, status, tipo } = req.query;
   const search = typeof q === 'string' ? q.trim() : '';
 
   const where = {
     empresaId: req.auth.empresaId,
-    secao: 'clientes',
   };
 
   if (status === 'ativo' || status === 'inativo' || status === 'bloq') where.status = status;
@@ -36,7 +35,7 @@ function buildClienteWhere(req) {
   return where;
 }
 
-function buildClienteOrderBy(query) {
+function buildFornecedorOrderBy(query) {
   const sortBy = typeof query.sortBy === 'string' ? query.sortBy : '';
   const sortDir = query.sortDir === 'desc' ? 'desc' : 'asc';
 
@@ -44,18 +43,9 @@ function buildClienteOrderBy(query) {
   return { [sortBy]: sortDir };
 }
 
-function normalizeClienteData(data) {
-  return {
-    ...data,
-    secao: 'clientes',
-  };
-}
-
-// ── Validação ─────────────────────────────────────────────
-const clienteSchema = z.object({
+const fornecedorSchema = z.object({
   nome:        z.string().min(1),
   tipo:        z.enum(['pf', 'pj', 'mei']).optional(),
-  secao:       z.literal('clientes').optional(),
   doc:         z.string().optional(),
   rg:          z.string().optional(),
   nascimento:  z.string().optional(),
@@ -73,11 +63,10 @@ const clienteSchema = z.object({
   estado:      z.string().optional(),
   pais:        z.string().optional(),
   status:      z.enum(['ativo', 'inativo', 'bloq']).optional(),
+  pedidos:     z.number().min(0).optional(),
   limite:      z.number().min(0).optional(),
   desconto:    z.string().optional(),
   condicao:    z.string().optional(),
-  vendedor:    z.string().optional(),
-  vendedorId:  z.string().optional(),
   grupo:       z.string().optional(),
   origem:      z.string().optional(),
   tags:        z.string().optional(),
@@ -85,13 +74,11 @@ const clienteSchema = z.object({
   cadastro:    z.string().optional(),
 });
 
-// ── GET /api/clientes ─────────────────────────────────────
-// Aceita ?q=busca, ?status=ativo|inativo. Fornecedores usam /api/fornecedores.
 router.get('/', async (req, res, next) => {
   try {
-    const result = await findManyPaginated(prisma.cliente, req.query, {
-      where: buildClienteWhere(req),
-      orderBy: buildClienteOrderBy(req.query),
+    const result = await findManyPaginated(prisma.fornecedor, req.query, {
+      where: buildFornecedorWhere(req),
+      orderBy: buildFornecedorOrderBy(req.query),
     });
 
     sendList(res, result);
@@ -102,13 +89,8 @@ router.get('/', async (req, res, next) => {
 
 router.get('/resumo', async (req, res, next) => {
   try {
-    const where = {
-      empresaId: req.auth.empresaId,
-      secao: 'clientes',
-    };
-
-    const itens = await prisma.cliente.findMany({
-      where,
+    const itens = await prisma.fornecedor.findMany({
+      where: { empresaId: req.auth.empresaId },
       select: { status: true, cadastro: true },
     });
 
@@ -130,78 +112,72 @@ router.get('/resumo', async (req, res, next) => {
   }
 });
 
-// ── GET /api/clientes/:id ─────────────────────────────────
 router.get('/:id', async (req, res, next) => {
   try {
-    const cliente = await prisma.cliente.findFirst({
-      where: { id: req.params.id, empresaId: req.auth.empresaId, secao: 'clientes' },
+    const fornecedor = await prisma.fornecedor.findFirst({
+      where: { id: req.params.id, empresaId: req.auth.empresaId },
     });
 
-    if (!cliente) {
-      return res.status(404).json({ ok: false, message: 'Cliente não encontrado.' });
+    if (!fornecedor) {
+      return res.status(404).json({ ok: false, message: 'Fornecedor nao encontrado.' });
     }
 
-    res.json({ ok: true, data: cliente });
+    res.json({ ok: true, data: fornecedor });
   } catch (err) {
     next(err);
   }
 });
 
-// ── POST /api/clientes ────────────────────────────────────
 router.post('/', async (req, res, next) => {
   try {
-    const data = normalizeClienteData(clienteSchema.parse(req.body));
+    const data = fornecedorSchema.parse(req.body);
 
-    const cliente = await prisma.cliente.create({
+    const fornecedor = await prisma.fornecedor.create({
       data: { ...data, empresaId: req.auth.empresaId },
     });
 
-    res.status(201).json({ ok: true, data: cliente });
+    res.status(201).json({ ok: true, data: fornecedor });
   } catch (err) {
     next(err);
   }
 });
 
-// ── PUT /api/clientes/:id ─────────────────────────────────
 router.put('/:id', async (req, res, next) => {
   try {
-    const existe = await prisma.cliente.findFirst({
-      where: { id: req.params.id, empresaId: req.auth.empresaId, secao: 'clientes' },
+    const existe = await prisma.fornecedor.findFirst({
+      where: { id: req.params.id, empresaId: req.auth.empresaId },
     });
     if (!existe) {
-      return res.status(404).json({ ok: false, message: 'Cliente não encontrado.' });
+      return res.status(404).json({ ok: false, message: 'Fornecedor nao encontrado.' });
     }
 
-    const data = normalizeClienteData(clienteSchema.partial().parse(req.body));
-
-    const cliente = await prisma.cliente.update({
+    const data = fornecedorSchema.partial().parse(req.body);
+    const fornecedor = await prisma.fornecedor.update({
       where: { id: req.params.id },
       data,
     });
 
-    res.json({ ok: true, data: cliente });
+    res.json({ ok: true, data: fornecedor });
   } catch (err) {
     next(err);
   }
 });
 
-// ── DELETE /api/clientes/:id ──────────────────────────────
-// Desativa — nunca apaga para preservar histórico de pedidos
 router.delete('/:id', async (req, res, next) => {
   try {
-    const existe = await prisma.cliente.findFirst({
-      where: { id: req.params.id, empresaId: req.auth.empresaId, secao: 'clientes' },
+    const existe = await prisma.fornecedor.findFirst({
+      where: { id: req.params.id, empresaId: req.auth.empresaId },
     });
     if (!existe) {
-      return res.status(404).json({ ok: false, message: 'Cliente não encontrado.' });
+      return res.status(404).json({ ok: false, message: 'Fornecedor nao encontrado.' });
     }
 
-    await prisma.cliente.update({
+    await prisma.fornecedor.update({
       where: { id: req.params.id },
       data: { status: 'inativo' },
     });
 
-    res.json({ ok: true, message: 'Cliente desativado.' });
+    res.json({ ok: true, message: 'Fornecedor desativado.' });
   } catch (err) {
     next(err);
   }
