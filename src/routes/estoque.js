@@ -25,9 +25,10 @@ const movimentacaoSchema = z.object({
 
 // ── GET /api/estoque/movimentacoes ────────────────────────
 // Lista movimentações com filtros
+// ?dataInicio=YYYY-MM-DD, ?dataFim=YYYY-MM-DD
 router.get('/movimentacoes', async (req, res, next) => {
   try {
-    const { tipo, prodId, deposito, q } = req.query;
+    const { tipo, prodId, deposito, q, dataInicio, dataFim } = req.query;
 
     const where = {
       empresaId: req.auth.empresaId,
@@ -39,6 +40,12 @@ router.get('/movimentacoes', async (req, res, next) => {
           { produto: { contains: q, mode: 'insensitive' } },
           { motivo:  { contains: q, mode: 'insensitive' } },
         ],
+      }),
+      ...((dataInicio || dataFim) && {
+        dataISO: {
+          ...(dataInicio && { gte: new Date(`${dataInicio}T00:00:00`) }),
+          ...(dataFim    && { lte: new Date(`${dataFim}T23:59:59`) }),
+        },
       }),
     };
 

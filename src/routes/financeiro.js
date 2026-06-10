@@ -26,9 +26,10 @@ const lancamentoSchema = z.object({
 
 // ── GET /api/financeiro ───────────────────────────────────
 // Aceita ?tipo=receita|despesa, ?status=avencer|pago|vencida, ?q=
+// ?criadoInicio=YYYY-MM-DD, ?criadoFim=YYYY-MM-DD
 router.get('/', async (req, res, next) => {
   try {
-    const { tipo, status, q } = req.query;
+    const { tipo, status, q, criadoInicio, criadoFim } = req.query;
 
     const where = {
       empresaId: req.auth.empresaId,
@@ -40,6 +41,12 @@ router.get('/', async (req, res, next) => {
           { categoria: { contains: q, mode: 'insensitive' } },
           { parte:     { contains: q, mode: 'insensitive' } },
         ],
+      }),
+      ...((criadoInicio || criadoFim) && {
+        criadoEm: {
+          ...(criadoInicio && { gte: new Date(`${criadoInicio}T00:00:00`) }),
+          ...(criadoFim    && { lte: new Date(`${criadoFim}T23:59:59`) }),
+        },
       }),
     };
 

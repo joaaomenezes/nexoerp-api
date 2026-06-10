@@ -22,13 +22,20 @@ const custoSchema = z.object({
 });
 
 // ── GET /api/custos ───────────────────────────────────────
+// ?tipo=custo|despesa, ?categoria=, ?dataInicio=YYYY-MM-DD, ?dataFim=YYYY-MM-DD
 router.get('/', async (req, res, next) => {
   try {
-    const { tipo, categoria } = req.query;
+    const { tipo, categoria, dataInicio, dataFim } = req.query;
     const where = {
       empresaId: req.auth.empresaId,
       ...(tipo      && { tipo }),
       ...(categoria && { categoria }),
+      ...((dataInicio || dataFim) && {
+        criadoEm: {
+          ...(dataInicio && { gte: new Date(`${dataInicio}T00:00:00`) }),
+          ...(dataFim    && { lte: new Date(`${dataFim}T23:59:59`) }),
+        },
+      }),
     };
     const result = await findManyPaginated(prisma.custo, req.query, { where, orderBy: { criadoEm: 'desc' } });
     sendList(res, result);
