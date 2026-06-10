@@ -21,22 +21,27 @@ const vendaItemSchema = z.object({
 }).passthrough();
 
 const vendaSchema = z.object({
-  id:            z.string().optional(),
-  cliente:       z.string().optional(),
-  clienteId:     z.string().optional(),
-  operador:      z.string().optional(),
-  operadorId:    z.string().optional(),
-  metodo:        z.string().optional(),
-  itens:         z.array(vendaItemSchema).optional(),
-  subtotal:      z.number().min(0).optional(),
-  desconto:      z.number().min(0).optional(),
-  total:         z.number().min(0).optional(),
-  status:        z.enum(['concluida', 'faturada', 'cancelada', 'estornada']).optional(),
-  tipo:          z.enum(['pdv', 'pedido']).optional(),
-  pedidoId:      z.string().optional(),
-  estornoMotivo: z.string().optional(),
-  dataStr:       z.string().optional(),
-  horaStr:       z.string().optional(),
+  id:              z.string().optional(),
+  cliente:         z.string().optional(),
+  clienteId:       z.string().optional(),
+  operador:        z.string().optional(),
+  operadorId:      z.string().optional(),
+  metodo:          z.string().optional(),
+  itens:           z.array(vendaItemSchema).optional(),
+  subtotal:        z.number().min(0).optional(),
+  desconto:        z.number().min(0).optional(),
+  total:           z.number().min(0).optional(),
+  status:          z.enum(['concluida', 'faturada', 'cancelada', 'estornada']).optional(),
+  tipo:            z.enum(['pdv', 'pedido']).optional(),
+  pedidoId:        z.string().optional(),
+  estornoMotivo:   z.string().optional(),
+  dataStr:         z.string().optional(),
+  horaStr:         z.string().optional(),
+  vencimentoFiado: z.string().optional(),
+  fiado:           z.object({
+    clienteId:  z.string().optional(),
+    vencimento: z.string().optional(),
+  }).passthrough().optional(),
 });
 
 function httpError(status, message) {
@@ -169,6 +174,20 @@ router.post('/', async (req, res, next) => {
     const id   = data.id   || `VDA-${Date.now().toString(36).toUpperCase()}`;
     const tipo = data.tipo ?? 'pdv';
 
+    const metodo   = String(data.metodo || '').toLowerCase();
+    const isFiado  = metodo === 'fiado';
+    const cidFiado = data.clienteId || data.fiado?.clienteId;
+    const vencFiado = data.vencimentoFiado || data.fiado?.vencimento;
+
+    if (isFiado) {
+      if (!cidFiado) {
+        return next(httpError(400, 'Para venda fiado, selecione ou cadastre um cliente e informe o vencimento.'));
+      }
+      if (!vencFiado) {
+        return next(httpError(400, 'Informe o vencimento do fiado.'));
+      }
+    }
+
     const venda = await prisma.$transaction(async (tx) => {
       // 1. Decrementa estoque e incrementa vendas + cria movimentação por item
       if (data.itens && data.itens.length > 0) {
@@ -212,13 +231,14 @@ router.post('/', async (req, res, next) => {
         }
       }
 
-      // 2. Cria a venda
+      // 2. Cria a venda (exclui campos do fiado que não pertencem ao modelo Venda)
+      const { vencimentoFiado: _vf, fiado: _fi, ...vendaFields } = data;
       const novaVenda = await tx.venda.create({
         data: {
-          ...data,
+          ...vendaFields,
           id,
-          itens:     data.itens ?? [],
-          status:    data.status ?? 'concluida',
+          itens:     vendaFields.itens ?? [],
+          status:    vendaFields.status ?? 'concluida',
           tipo,
           empresaId: req.auth.empresaId,
         },
@@ -233,10 +253,11 @@ router.post('/', async (req, res, next) => {
           valor:          data.total ?? 0,
           categoria:      'Vendas',
           parte:          data.cliente || null,
-          status:         'pago',
-          vencimento:     hoje,
-          pagoEm:         hoje,
+          status:         isFiado ? 'avencer' : 'pago',
+          vencimento:     isFiado ? (vencFiado || hoje) : hoje,
+          pagoEm:         isFiado ? null : hoje,
           formaPagamento: data.metodo || null,
+          obs:            null,
           vendaId:        id,
           empresaId:      req.auth.empresaId,
         },
