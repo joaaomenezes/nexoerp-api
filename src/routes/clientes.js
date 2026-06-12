@@ -130,6 +130,47 @@ router.get('/resumo', async (req, res, next) => {
   }
 });
 
+// ── GET /api/clientes/:id/credito ────────────────────────
+router.get('/:id/credito', async (req, res, next) => {
+  try {
+    const cliente = await prisma.cliente.findFirst({
+      where: { id: req.params.id, empresaId: req.auth.empresaId, secao: 'clientes' },
+      select: { id: true, limite: true },
+    });
+
+    if (!cliente) {
+      return res.status(404).json({ ok: false, message: 'Cliente não encontrado.' });
+    }
+
+    const vendas = await prisma.venda.findMany({
+      where: { clienteId: req.params.id, empresaId: req.auth.empresaId },
+      select: { id: true },
+    });
+    const vendaIds = vendas.map(v => v.id);
+
+    const agg = await prisma.lancamento.aggregate({
+      _sum: { valor: true },
+      where: {
+        empresaId: req.auth.empresaId,
+        tipo: 'receita',
+        status: { in: ['avencer', 'vencida'] },
+        vendaId: { in: vendaIds.length ? vendaIds : ['__noop__'] },
+      },
+    });
+
+    const limiteCredito   = parseFloat(cliente.limite || 0);
+    const totalEmAberto   = parseFloat(agg._sum.valor || 0);
+    const limiteDisponivel = limiteCredito - totalEmAberto;
+
+    res.json({
+      ok: true,
+      data: { clienteId: cliente.id, limiteCredito, totalEmAberto, limiteDisponivel },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ── GET /api/clientes/:id ─────────────────────────────────
 router.get('/:id', async (req, res, next) => {
   try {

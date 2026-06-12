@@ -51,12 +51,13 @@ function httpError(status, message) {
 }
 
 function buildVendaWhere(req) {
-  const { status, tipo, q, operadorId, metodo, dataInicio, dataFim } = req.query;
+  const { status, tipo, q, operadorId, metodo, dataInicio, dataFim, clienteId } = req.query;
   const where = {
     empresaId: req.auth.empresaId,
     ...(status && status !== 'todos' && { status }),
     ...(tipo && { tipo }),
     ...(operadorId && { operadorId }),
+    ...(clienteId && { clienteId }),
   };
 
   if (q) {
@@ -244,7 +245,16 @@ router.post('/', async (req, res, next) => {
         },
       });
 
-      // 3. Cria lançamento de receita no financeiro vinculado à venda
+      // 3. Incrementa contador de compras do cliente (PDV)
+      const clienteIdVenda = data.clienteId || data.fiado?.clienteId;
+      if (clienteIdVenda) {
+        await tx.cliente.updateMany({
+          where: { id: clienteIdVenda, empresaId: req.auth.empresaId },
+          data:  { compras: { increment: 1 } },
+        });
+      }
+
+      // 4. Cria lançamento de receita no financeiro vinculado à venda
       const hoje = new Date().toISOString().slice(0, 10);
       await tx.lancamento.create({
         data: {
