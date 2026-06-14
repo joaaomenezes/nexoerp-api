@@ -269,6 +269,7 @@ router.post('/', async (req, res, next) => {
           formaPagamento: data.metodo || null,
           obs:            null,
           vendaId:        id,
+          clienteId:      cidFiado || null,
           empresaId:      req.auth.empresaId,
         },
       });

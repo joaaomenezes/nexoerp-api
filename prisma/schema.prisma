@@ -289,6 +289,7 @@ model Lancamento {
   formaPagamento String?
   vendaId        String? // referência à venda que gerou este lançamento
   pedidoId       String? // referência ao pedido que gerou este lançamento
+  clienteId      String? // referência ao cliente para histórico e filtros
   criadoEm       DateTime @default(now())
 
   empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)

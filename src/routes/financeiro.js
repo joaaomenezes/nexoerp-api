@@ -22,24 +22,29 @@ const lancamentoSchema = z.object({
   obs:            z.string().optional(),
   pagoEm:         z.string().optional(),
   formaPagamento: z.string().optional(),
+  clienteId:      z.string().optional(),
 });
 
 // ── GET /api/financeiro ───────────────────────────────────
 // Aceita ?tipo=receita|despesa, ?status=avencer|pago|vencida, ?q=
 // ?criadoInicio=YYYY-MM-DD, ?criadoFim=YYYY-MM-DD
+// ?clienteId=, ?formaPagamento=, ?pagoInicio=YYYY-MM-DD, ?pagoFim=YYYY-MM-DD
 router.get('/', async (req, res, next) => {
   try {
-    const { tipo, status, q, criadoInicio, criadoFim } = req.query;
+    const { tipo, status, q, criadoInicio, criadoFim, clienteId, formaPagamento, pagoInicio, pagoFim, sortBy } = req.query;
 
     const where = {
       empresaId: req.auth.empresaId,
       ...(tipo   && { tipo }),
       ...(status && { status }),
+      ...(clienteId      && { clienteId }),
+      ...(formaPagamento && { formaPagamento: { contains: formaPagamento, mode: 'insensitive' } }),
       ...(q && {
         OR: [
           { descricao: { contains: q, mode: 'insensitive' } },
           { categoria: { contains: q, mode: 'insensitive' } },
           { parte:     { contains: q, mode: 'insensitive' } },
+          { vendaId:   { contains: q, mode: 'insensitive' } },
         ],
       }),
       ...((criadoInicio || criadoFim) && {
@@ -48,11 +53,19 @@ router.get('/', async (req, res, next) => {
           ...(criadoFim    && { lte: new Date(`${criadoFim}T23:59:59`) }),
         },
       }),
+      ...((pagoInicio || pagoFim) && {
+        pagoEm: {
+          ...(pagoInicio && { gte: pagoInicio }),
+          ...(pagoFim    && { lte: pagoFim }),
+        },
+      }),
     };
+
+    const orderBy = sortBy === 'pagoEm' ? { pagoEm: 'desc' } : { criadoEm: 'desc' };
 
     const result = await findManyPaginated(prisma.lancamento, req.query, {
       where,
-      orderBy: { criadoEm: 'desc' },
+      orderBy,
     });
 
     sendList(res, result);
@@ -87,6 +100,56 @@ router.get('/resumo', async (req, res, next) => {
         receitas: totalReceitas,
         despesas: totalDespesas,
         saldo:    totalReceitas - totalDespesas,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── GET /api/financeiro/resumo-recebimentos ───────────────
+// KPIs da aba Recebimentos: recebido hoje, mês, período e ticket médio
+router.get('/resumo-recebimentos', async (req, res, next) => {
+  try {
+    const { pagoInicio, pagoFim, clienteId } = req.query;
+    const hoje     = new Date().toISOString().slice(0, 10);
+    const mesInicio = hoje.slice(0, 7) + '-01';
+    const base = {
+      empresaId: req.auth.empresaId,
+      tipo:   'receita',
+      status: 'pago',
+      ...(clienteId && { clienteId }),
+    };
+
+    const periodoWhere = (pagoInicio || pagoFim)
+      ? { ...base, pagoEm: { ...(pagoInicio && { gte: pagoInicio }), ...(pagoFim && { lte: pagoFim }) } }
+      : base;
+
+    const [aggHoje, aggMes, aggPeriodo] = await Promise.all([
+      prisma.lancamento.aggregate({
+        where: { ...base, pagoEm: { gte: hoje, lte: hoje } },
+        _sum: { valor: true }, _count: { id: true },
+      }),
+      prisma.lancamento.aggregate({
+        where: { ...base, pagoEm: { gte: mesInicio, lte: hoje } },
+        _sum: { valor: true },
+      }),
+      prisma.lancamento.aggregate({
+        where: periodoWhere,
+        _sum: { valor: true }, _count: { id: true },
+      }),
+    ]);
+
+    const totalPeriodo = aggPeriodo._sum.valor ?? 0;
+    const countPeriodo = aggPeriodo._count.id  ?? 0;
+
+    res.json({
+      ok: true,
+      data: {
+        recebidoHoje: aggHoje._sum.valor ?? 0,
+        recebidoMes:  aggMes._sum.valor  ?? 0,
+        totalPeriodo,
+        ticketMedio:  countPeriodo > 0 ? totalPeriodo / countPeriodo : 0,
       },
     });
   } catch (err) {
