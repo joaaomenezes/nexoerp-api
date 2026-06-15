@@ -25,19 +25,26 @@ const custoSchema = z.object({
 // ?tipo=custo|despesa, ?categoria=, ?dataInicio=YYYY-MM-DD, ?dataFim=YYYY-MM-DD
 router.get('/', async (req, res, next) => {
   try {
-    const { tipo, categoria, dataInicio, dataFim } = req.query;
+    const { tipo, categoria, dataInicio, dataFim, q } = req.query;
     const where = {
       empresaId: req.auth.empresaId,
       ...(tipo      && { tipo }),
       ...(categoria && { categoria }),
+      ...(q && {
+        OR: [
+          { descricao:  { contains: q, mode: 'insensitive' } },
+          { categoria:  { contains: q, mode: 'insensitive' } },
+          { fornecedor: { contains: q, mode: 'insensitive' } },
+        ],
+      }),
       ...((dataInicio || dataFim) && {
-        criadoEm: {
-          ...(dataInicio && { gte: new Date(`${dataInicio}T00:00:00`) }),
-          ...(dataFim    && { lte: new Date(`${dataFim}T23:59:59`) }),
+        data: {
+          ...(dataInicio && { gte: dataInicio }),
+          ...(dataFim    && { lte: dataFim }),
         },
       }),
     };
-    const result = await findManyPaginated(prisma.custo, req.query, { where, orderBy: { criadoEm: 'desc' } });
+    const result = await findManyPaginated(prisma.custo, req.query, { where, orderBy: { data: 'desc' } });
     sendList(res, result);
   } catch (err) { next(err); }
 });

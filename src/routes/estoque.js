@@ -64,7 +64,8 @@ router.get('/movimentacoes', async (req, res, next) => {
 // Posição atual do estoque (todos os produtos com estoque e alertas)
 router.get('/posicao', async (req, res, next) => {
   try {
-    const { deposito, q } = req.query;
+    const { deposito, q, estoqueStatus, stock, sortBy, sortDir } = req.query;
+    const stockFilter = estoqueStatus || stock;
 
     const where = {
       empresaId: req.auth.empresaId,
@@ -77,15 +78,25 @@ router.get('/posicao', async (req, res, next) => {
       }),
     };
 
+    if (stockFilter === 'baixo') where.estoque = { gt: 0, lte: prisma.produto.fields.estoqueMin };
+    if (stockFilter === 'zerado' || stockFilter === 'zero') where.estoque = 0;
+    if (stockFilter === 'ok') where.estoque = { gt: prisma.produto.fields.estoqueMin };
+
+    const sortFields = new Set(['nome', 'estoque']);
+    const orderBy = sortFields.has(sortBy)
+      ? { [sortBy]: sortDir === 'desc' ? 'desc' : 'asc' }
+      : { nome: 'asc' };
+
     const result = await findManyPaginated(prisma.produto, req.query, {
       where,
       select: {
-        id: true, sku: true, nome: true, estoque: true,
+        id: true, sku: true, nome: true, cat: true, estoque: true,
         estoqueMin: true, estoqueMax: true, deposito: true,
         unidade: true, cor: true, emoji: true,
         status: true, ultimaEntrada: true, custo: true, fornecedor: true,
+        ean: true,
       },
-      orderBy: { nome: 'asc' },
+      orderBy,
     });
 
     // Adiciona flag de alerta (só ativos)

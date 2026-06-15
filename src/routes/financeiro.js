@@ -31,12 +31,17 @@ const lancamentoSchema = z.object({
 // ?clienteId=, ?formaPagamento=, ?pagoInicio=YYYY-MM-DD, ?pagoFim=YYYY-MM-DD
 router.get('/', async (req, res, next) => {
   try {
-    const { tipo, status, q, criadoInicio, criadoFim, clienteId, formaPagamento, pagoInicio, pagoFim, sortBy } = req.query;
+    const { tipo, status, q, criadoInicio, criadoFim, clienteId, formaPagamento, pagoInicio, pagoFim, sortBy, excludeStatus } = req.query;
+    const excludedStatuses = String(excludeStatus || '')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean);
 
     const where = {
       empresaId: req.auth.empresaId,
       ...(tipo   && { tipo }),
       ...(status && { status }),
+      ...(!status && excludedStatuses.length && { status: { notIn: excludedStatuses } }),
       ...(clienteId      && { clienteId }),
       ...(formaPagamento && { formaPagamento: { contains: formaPagamento, mode: 'insensitive' } }),
       ...(q && {
