@@ -31,6 +31,7 @@ function publicCharge(charge) {
     ticketUrl: charge.ticketUrl,
     expiraEm: charge.expiraEm,
     pagoEm: charge.pagoEm,
+    vinculada: Boolean(charge.vendaId),
   };
 }
 
@@ -147,17 +148,27 @@ router.get('/cobrancas/:id', async (req, res, next) => {
       where: { id: req.params.id, empresaId: req.auth.empresaId },
     });
     if (!charge) throw httpError(404, 'Cobranca PIX nao encontrada.');
+    if (charge.status === 'pendente') {
+      charge = await syncChargeStatus(charge);
+    }
     if (charge.status === 'pendente' && charge.expiraEm && charge.expiraEm <= new Date()) {
       const { credentials } = await getMercadoPagoContext(req.auth.empresaId);
+      let cancellationAccepted = !charge.providerPaymentId;
       if (charge.providerPaymentId) {
-        await mercadoPago.cancelPayment(credentials.accessToken, charge.providerPaymentId, `cancel-${charge.id}`).catch(() => {});
+        try {
+          await mercadoPago.cancelPayment(credentials.accessToken, charge.providerPaymentId, `cancel-${charge.id}`);
+          cancellationAccepted = true;
+        } catch (_) {
+          cancellationAccepted = false;
+        }
       }
-      charge = await prisma.pixCobranca.update({
-        where: { id: charge.id },
-        data: { status: 'expirado' },
-      });
-    } else if (charge.status === 'pendente') {
       charge = await syncChargeStatus(charge);
+      if (charge.status === 'pendente' && cancellationAccepted) {
+        charge = await prisma.pixCobranca.update({
+          where: { id: charge.id },
+          data: { status: 'expirado' },
+        });
+      }
     }
     res.json({ ok: true, data: publicCharge(charge) });
   } catch (err) {
