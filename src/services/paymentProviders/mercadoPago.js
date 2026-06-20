@@ -1,4 +1,4 @@
-const { MercadoPagoConfig, Payment, User } = require('mercadopago');
+const { MercadoPagoConfig, Payment, PaymentRefund, User } = require('mercadopago');
 
 function createClient(accessToken) {
   return new MercadoPagoConfig({
@@ -38,4 +38,18 @@ async function getPayment(accessToken, paymentId) {
   return new Payment(createClient(accessToken)).get({ id: paymentId });
 }
 
-module.exports = { createClient, testConnection, createPixCharge, getPayment };
+async function cancelPayment(accessToken, paymentId, idempotencyKey) {
+  return new Payment(createClient(accessToken)).cancel({
+    id: paymentId,
+    requestOptions: { idempotencyKey },
+  });
+}
+
+async function refundPayment(accessToken, paymentId, idempotencyKey) {
+  return new PaymentRefund(createClient(accessToken)).total({
+    payment_id: paymentId,
+    requestOptions: { idempotencyKey },
+  });
+}
+
+module.exports = { createClient, testConnection, createPixCharge, getPayment, cancelPayment, refundPayment };

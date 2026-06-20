@@ -34,6 +34,45 @@ function publicCharge(charge) {
   };
 }
 
+async function getMercadoPagoContext(empresaId) {
+  const integration = await prisma.integracaoPagamento.findUnique({
+    where: { empresaId_tipo: { empresaId, tipo: 'pix' } },
+  });
+  if (!integration?.credenciaisCriptografadas || integration.provedor !== 'mercadopago') {
+    throw httpError(409, 'Mercado Pago nao conectado.');
+  }
+  return { integration, credentials: decryptCredentials(integration.credenciaisCriptografadas) };
+}
+
+function mapProviderStatus(status) {
+  return {
+    approved: 'pago',
+    pending: 'pendente',
+    in_process: 'pendente',
+    rejected: 'recusado',
+    cancelled: 'cancelado',
+    refunded: 'estornado',
+    charged_back: 'contestado',
+  }[status] || 'pendente';
+}
+
+async function syncChargeStatus(charge) {
+  if (!charge.providerPaymentId || !['criando', 'pendente'].includes(charge.status)) return charge;
+  const { credentials } = await getMercadoPagoContext(charge.empresaId);
+  const payment = await mercadoPago.getPayment(credentials.accessToken, charge.providerPaymentId);
+  const amountMatches = Math.abs(Number(payment.transaction_amount || 0) - charge.valor) < 0.01;
+  const status = amountMatches ? mapProviderStatus(payment.status) : 'divergente';
+  return prisma.pixCobranca.update({
+    where: { id: charge.id },
+    data: {
+      status,
+      pagoEm: status === 'pago' ? new Date(payment.date_approved || Date.now()) : charge.pagoEm,
+      endToEndId: payment.transaction_details?.transaction_id || charge.endToEndId,
+      erro: amountMatches ? null : 'Valor confirmado pelo provedor difere da cobranca.',
+    },
+  });
+}
+
 router.use(requireAuth);
 router.use(requirePermission('pdv'));
 
@@ -104,10 +143,48 @@ router.post('/cobrancas', async (req, res, next) => {
 
 router.get('/cobrancas/:id', async (req, res, next) => {
   try {
-    const charge = await prisma.pixCobranca.findFirst({
+    let charge = await prisma.pixCobranca.findFirst({
       where: { id: req.params.id, empresaId: req.auth.empresaId },
     });
     if (!charge) throw httpError(404, 'Cobranca PIX nao encontrada.');
+    if (charge.status === 'pendente' && charge.expiraEm && charge.expiraEm <= new Date()) {
+      const { credentials } = await getMercadoPagoContext(req.auth.empresaId);
+      if (charge.providerPaymentId) {
+        await mercadoPago.cancelPayment(credentials.accessToken, charge.providerPaymentId, `cancel-${charge.id}`).catch(() => {});
+      }
+      charge = await prisma.pixCobranca.update({
+        where: { id: charge.id },
+        data: { status: 'expirado' },
+      });
+    } else if (charge.status === 'pendente') {
+      charge = await syncChargeStatus(charge);
+    }
+    res.json({ ok: true, data: publicCharge(charge) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.delete('/cobrancas/:id', async (req, res, next) => {
+  try {
+    let charge = await prisma.pixCobranca.findFirst({
+      where: { id: req.params.id, empresaId: req.auth.empresaId },
+    });
+    if (!charge) throw httpError(404, 'Cobranca PIX nao encontrada.');
+    if (charge.vendaId) throw httpError(409, 'A cobranca ja esta vinculada a uma venda.');
+    if (charge.status === 'pago') throw httpError(409, 'A cobranca ja foi paga e nao pode ser cancelada.');
+    if (['cancelado', 'expirado', 'recusado', 'erro'].includes(charge.status)) {
+      return res.json({ ok: true, data: publicCharge(charge) });
+    }
+
+    if (charge.providerPaymentId) {
+      const { credentials } = await getMercadoPagoContext(req.auth.empresaId);
+      await mercadoPago.cancelPayment(credentials.accessToken, charge.providerPaymentId, `cancel-${charge.id}`);
+    }
+    charge = await prisma.pixCobranca.update({
+      where: { id: charge.id },
+      data: { status: 'cancelado' },
+    });
     res.json({ ok: true, data: publicCharge(charge) });
   } catch (err) {
     next(err);
