@@ -38,6 +38,8 @@ model Empresa {
   configuracao          Configuracao?
   configuracaoPDV       ConfiguracaoPDV?
   catalogoConfig        CatalogoConfig?
+  integracoesPagamento  IntegracaoPagamento[]
+  cobrancasPix           PixCobranca[]
 
   @@map("empresas")
 }
@@ -256,6 +258,7 @@ model Venda {
   operador      String?
   operadorId    String?
   metodo        String?
+  pagamentos    Json     @default("[]")
   itens         Json     @default("[]")
   subtotal      Float    @default(0)
   desconto      Float    @default(0)
@@ -473,6 +476,54 @@ model ConfiguracaoPDV {
   empresaId String  @unique
 
   @@map("configuracoes_pdv")
+}
+
+// Configuracoes e credenciais de provedores externos por empresa.
+// O campo credenciais armazena somente conteudo criptografado.
+model IntegracaoPagamento {
+  id                        String   @id @default(cuid())
+  tipo                      String   @default("pix")
+  provedor                  String
+  ambiente                  String   @default("sandbox")
+  status                    String   @default("desconectado")
+  ativo                     Boolean  @default(false)
+  credenciaisCriptografadas String?
+  webhookSecret             String?
+  contaExternaId            String?
+  criadoEm                  DateTime @default(now())
+  atualizadoEm              DateTime @updatedAt
+
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  empresaId String
+
+  @@unique([empresaId, tipo])
+  @@map("integracoes_pagamento")
+}
+
+model PixCobranca {
+  id                String    @id @default(cuid())
+  provedor          String
+  providerPaymentId String?
+  referencia        String
+  status            String    @default("criando")
+  valor             Float
+  qrCode            String?
+  ticketUrl         String?
+  expiraEm          DateTime?
+  pagoEm            DateTime?
+  endToEndId         String?
+  vendaId           String?
+  erro              String?
+  criadoEm          DateTime  @default(now())
+  atualizadoEm      DateTime  @updatedAt
+
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  empresaId String
+
+  @@unique([empresaId, referencia])
+  @@unique([provedor, providerPaymentId])
+  @@index([empresaId, status])
+  @@map("pix_cobrancas")
 }
 
 // ─── CONFIGURAÇÃO DO CATÁLOGO ────────────────────────────

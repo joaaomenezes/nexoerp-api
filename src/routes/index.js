@@ -14,6 +14,10 @@ const vendedoresRoutes = require('./vendedores');
 const custosRoutes     = require('./custos');
 const caixasRoutes     = require('./caixas');
 const relatoriosRoutes = require('./relatorios');
+const configuracoesPdvRoutes = require('./configuracoes-pdv');
+const integracoesPixRoutes = require('./integracoes-pix');
+const pixRoutes = require('./pix');
+const webhookRoutes = require('./webhooks');
 
 router.use('/auth',       authRoutes);
 router.use('/produtos',   produtosRoutes);
@@ -29,5 +33,9 @@ router.use('/vendedores', vendedoresRoutes);
 router.use('/custos',    custosRoutes);
 router.use('/caixas',    caixasRoutes);
 router.use('/relatorios', relatoriosRoutes);
+router.use('/configuracoes-pdv', configuracoesPdvRoutes);
+router.use('/integracoes/pix', integracoesPixRoutes);
+router.use('/pix', pixRoutes);
+router.use('/webhooks', webhookRoutes);
 
 module.exports = router;

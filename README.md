@@ -40,11 +40,13 @@ Copy-Item .env.example .env
 # Mac/Linux
 cp .env.example .env
 ```
-Abra o `.env` e preencha as três variáveis:
+Abra o `.env` e preencha as variáveis:
 
 ```env
 DATABASE_URL="<connection string do Neon — peça ao dono do projeto>"
 JWT_SECRET="<frase secreta — peça ao dono do projeto>"
+INTEGRATION_ENCRYPTION_KEY="<chave aleatória com pelo menos 32 caracteres>"
+PUBLIC_API_URL="http://localhost:3333"
 PORT=3333
 ```
 

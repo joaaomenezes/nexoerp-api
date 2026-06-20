@@ -20,6 +20,22 @@ const vendaItemSchema = z.object({
   subtotal: z.number().min(0).optional(),
 }).passthrough();
 
+const pagamentoSchema = z.object({
+  metodo:         z.enum(['dinheiro', 'pix', 'credito', 'debito', 'voucher', 'vale', 'fiado']),
+  valor:          z.number().positive(),
+  status:         z.enum(['pendente', 'aguardando', 'confirmado', 'recusado']).optional(),
+  valorRecebido:  z.number().min(0).optional(),
+  troco:          z.number().min(0).optional(),
+  bandeira:       z.string().optional(),
+  parcelas:       z.number().int().positive().optional(),
+  valorOriginal:  z.number().min(0).optional(),
+  acrescimo:      z.number().min(0).optional(),
+  vencimento:     z.string().optional(),
+  cobrancaId:     z.string().optional(),
+  providerPaymentId: z.string().optional(),
+  provedor:       z.string().optional(),
+}).passthrough();
+
 const vendaSchema = z.object({
   id:              z.string().optional(),
   cliente:         z.string().optional(),
@@ -27,6 +43,7 @@ const vendaSchema = z.object({
   operador:        z.string().optional(),
   operadorId:      z.string().optional(),
   metodo:          z.string().optional(),
+  pagamentos:      z.array(pagamentoSchema).max(10).optional(),
   itens:           z.array(vendaItemSchema).optional(),
   subtotal:        z.number().min(0).optional(),
   desconto:        z.number().min(0).optional(),
@@ -175,10 +192,18 @@ router.post('/', async (req, res, next) => {
     const id   = data.id   || `VDA-${Date.now().toString(36).toUpperCase()}`;
     const tipo = data.tipo ?? 'pdv';
 
-    const metodo   = String(data.metodo || '').toLowerCase();
+    const metodo   = String(data.metodo || 'dinheiro').toLowerCase();
     const isFiado  = metodo === 'fiado';
     const cidFiado = data.clienteId || data.fiado?.clienteId;
     const vencFiado = data.vencimentoFiado || data.fiado?.vencimento;
+    const pagamentos = data.pagamentos?.length
+      ? data.pagamentos
+      : [{
+          metodo,
+          valor: data.total ?? 0,
+          status: isFiado ? 'pendente' : 'confirmado',
+        }];
+    const metodoVenda = pagamentos.length > 1 ? 'multiplo' : metodo;
 
     if (isFiado) {
       if (!cidFiado) {
@@ -187,6 +212,29 @@ router.post('/', async (req, res, next) => {
       if (!vencFiado) {
         return next(httpError(400, 'Informe o vencimento do fiado.'));
       }
+    }
+
+    const pixPayments = pagamentos.filter(payment => payment.metodo === 'pix');
+    const pixIntegration = pixPayments.length
+      ? await prisma.integracaoPagamento.findUnique({
+          where: { empresaId_tipo: { empresaId: req.auth.empresaId, tipo: 'pix' } },
+        })
+      : null;
+    if (pixIntegration?.ativo && pixIntegration.status === 'conectado') {
+      if (pixPayments.some(payment => !payment.cobrancaId)) {
+        throw httpError(409, 'A venda PIX automatica precisa de uma cobranca confirmada.');
+      }
+    }
+
+    const confirmedPixCharges = [];
+    for (const payment of pixPayments.filter(item => item.cobrancaId)) {
+      const charge = await prisma.pixCobranca.findFirst({
+        where: { id: payment.cobrancaId, empresaId: req.auth.empresaId },
+      });
+      if (!charge || charge.status !== 'pago') throw httpError(409, 'A cobranca PIX ainda nao foi confirmada.');
+      if (charge.vendaId) throw httpError(409, 'Esta cobranca PIX ja foi utilizada em outra venda.');
+      if (Math.abs(charge.valor - payment.valor) >= 0.01) throw httpError(409, 'O valor da cobranca PIX difere da venda.');
+      confirmedPixCharges.push(charge);
     }
 
     const venda = await prisma.$transaction(async (tx) => {
@@ -238,12 +286,22 @@ router.post('/', async (req, res, next) => {
         data: {
           ...vendaFields,
           id,
+          metodo:    metodoVenda,
+          pagamentos,
           itens:     vendaFields.itens ?? [],
           status:    vendaFields.status ?? 'concluida',
           tipo,
           empresaId: req.auth.empresaId,
         },
       });
+
+      for (const charge of confirmedPixCharges) {
+        const linked = await tx.pixCobranca.updateMany({
+          where: { id: charge.id, empresaId: req.auth.empresaId, vendaId: null, status: 'pago' },
+          data: { vendaId: id },
+        });
+        if (linked.count !== 1) throw httpError(409, 'A cobranca PIX ja foi vinculada a outra venda.');
+      }
 
       // 3. Incrementa contador de compras do cliente (PDV)
       const clienteIdVenda = data.clienteId || data.fiado?.clienteId;
@@ -266,7 +324,7 @@ router.post('/', async (req, res, next) => {
           status:         isFiado ? 'avencer' : 'pago',
           vencimento:     isFiado ? (vencFiado || hoje) : hoje,
           pagoEm:         isFiado ? null : hoje,
-          formaPagamento: data.metodo || null,
+          formaPagamento: metodoVenda || null,
           obs:            null,
           vendaId:        id,
           clienteId:      cidFiado || null,
