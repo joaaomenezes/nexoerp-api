@@ -48,66 +48,89 @@ async function testConnection(accessToken) {
   };
 }
 
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function isLocked(err) {
+  return err.providerStatus === 400 && /locked/i.test(err.message);
+}
+
+function isAlreadyAssigned(err) {
+  return err.providerStatus === 400 && /already assigned|already exists|exists$/i.test(err.message);
+}
+
+async function createStoreWithRetry(accessToken, userId, body, externalStoreId, attempts = 3) {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await apiRequest(accessToken, `/users/${userId}/stores`, { method: 'POST', body });
+    } catch (err) {
+      if (isAlreadyAssigned(err)) {
+        const search = await apiRequest(accessToken, `/users/${userId}/stores/search?external_id=${encodeURIComponent(externalStoreId)}`);
+        const existing = search.results?.[0] || search.data?.[0] || search[0];
+        if (existing) return existing;
+        throw err;
+      }
+      if (isLocked(err) && i < attempts - 1) {
+        await sleep(4000);
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+async function createPosWithRetry(accessToken, body, externalPosId, attempts = 3) {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await apiRequest(accessToken, '/pos', { method: 'POST', body });
+    } catch (err) {
+      if (isAlreadyAssigned(err)) {
+        const search = await apiRequest(accessToken, `/pos/search?external_id=${encodeURIComponent(externalPosId)}`);
+        const existing = search.results?.[0] || search.data?.[0] || search[0];
+        if (existing) return existing;
+        throw err;
+      }
+      if (isLocked(err) && i < attempts - 1) {
+        await sleep(4000);
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 async function configurePointOfSale(accessToken, userId, input) {
   let storeId = input.storeId || null;
   if (!storeId) {
-    let store;
-    try {
-      store = await apiRequest(accessToken, `/users/${userId}/stores`, {
-        method: 'POST',
-        body: {
-          name: input.storeName,
-          external_id: input.externalStoreId,
-          location: {
-            street_number: input.streetNumber,
-            street_name: input.streetName,
-            city_name: input.cityName,
-            state_name: input.stateName,
-            latitude: input.latitude,
-            longitude: input.longitude,
-            reference: input.reference || undefined,
-          },
-        },
-      });
-    } catch (err) {
-      if (err.providerStatus === 400 && /already assigned/i.test(err.message)) {
-        const search = await apiRequest(accessToken, `/users/${userId}/stores/search?external_id=${encodeURIComponent(input.externalStoreId)}`);
-        const existing = search.results?.[0] || search.data?.[0] || search[0];
-        if (!existing) throw err;
-        store = existing;
-      } else {
-        throw err;
-      }
-    }
+    const store = await createStoreWithRetry(accessToken, userId, {
+      name: input.storeName,
+      external_id: input.externalStoreId,
+      location: {
+        street_number: input.streetNumber,
+        street_name: input.streetName,
+        city_name: input.cityName,
+        state_name: input.stateName,
+        latitude: input.latitude,
+        longitude: input.longitude,
+        reference: input.reference || undefined,
+      },
+    }, input.externalStoreId);
     storeId = String(store.id);
   }
 
   let pos;
   try {
-    pos = await apiRequest(accessToken, '/pos', {
-      method: 'POST',
-      body: {
-        name: input.posName,
-        fixed_amount: true,
-        store_id: Number(storeId),
-        external_store_id: input.externalStoreId,
-        external_id: input.externalPosId,
-      },
-    });
+    pos = await createPosWithRetry(accessToken, {
+      name: input.posName,
+      fixed_amount: true,
+      store_id: Number(storeId),
+      external_store_id: input.externalStoreId,
+      external_id: input.externalPosId,
+    }, input.externalPosId);
   } catch (error) {
-    if (error.providerStatus === 400 && /already assigned/i.test(error.message)) {
-      const search = await apiRequest(accessToken, `/pos/search?external_id=${encodeURIComponent(input.externalPosId)}`);
-      const existing = search.results?.[0] || search.data?.[0] || search[0];
-      if (existing) {
-        pos = existing;
-      } else {
-        error.partialConfig = { storeId, externalStoreId: input.externalStoreId };
-        throw error;
-      }
-    } else {
-      error.partialConfig = { storeId, externalStoreId: input.externalStoreId };
-      throw error;
-    }
+    error.partialConfig = { storeId, externalStoreId: input.externalStoreId };
+    throw error;
   }
 
   return {
