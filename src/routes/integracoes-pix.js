@@ -208,12 +208,23 @@ router.delete('/', requireOwner, async (req, res, next) => {
     });
     if (!integration) return res.json({ ok: true, data: null });
 
+    const currentCredentials = integration.credenciaisCriptografadas
+      ? decryptCredentials(integration.credenciaisCriptografadas)
+      : {};
+    const preservedCredentials = {
+      storeId: currentCredentials.storeId,
+      externalStoreId: currentCredentials.externalStoreId,
+      posId: currentCredentials.posId,
+      externalPosId: currentCredentials.externalPosId,
+    };
+    const hasPreserved = Object.values(preservedCredentials).some(Boolean);
+
     await prisma.integracaoPagamento.update({
       where: { id: integration.id },
       data: {
         ativo: false,
         status: 'desconectado',
-        credenciaisCriptografadas: null,
+        credenciaisCriptografadas: hasPreserved ? encryptCredentials(preservedCredentials) : null,
         webhookSecret: null,
         contaExternaId: null,
       },

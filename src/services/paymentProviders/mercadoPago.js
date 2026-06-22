@@ -53,11 +53,11 @@ function sleep(ms) {
 }
 
 function isLocked(err) {
-  return err.providerStatus === 400 && /locked/i.test(err.message);
+  return err.providerData !== undefined && /locked/i.test(err.message);
 }
 
 function isAlreadyAssigned(err) {
-  return err.providerStatus === 400 && /already assigned|already exists|point of sale.*exist|exist.*point of sale/i.test(err.message);
+  return err.providerData !== undefined && /already assigned|already exists|point of sale.*exist|exist.*point of sale/i.test(err.message);
 }
 
 async function createStoreWithRetry(accessToken, userId, body, externalStoreId, attempts = 3) {
