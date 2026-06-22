@@ -51,22 +51,34 @@ async function testConnection(accessToken) {
 async function configurePointOfSale(accessToken, userId, input) {
   let storeId = input.storeId || null;
   if (!storeId) {
-    const store = await apiRequest(accessToken, `/users/${userId}/stores`, {
-      method: 'POST',
-      body: {
-        name: input.storeName,
-        external_id: input.externalStoreId,
-        location: {
-          street_number: input.streetNumber,
-          street_name: input.streetName,
-          city_name: input.cityName,
-          state_name: input.stateName,
-          latitude: input.latitude,
-          longitude: input.longitude,
-          reference: input.reference || undefined,
+    let store;
+    try {
+      store = await apiRequest(accessToken, `/users/${userId}/stores`, {
+        method: 'POST',
+        body: {
+          name: input.storeName,
+          external_id: input.externalStoreId,
+          location: {
+            street_number: input.streetNumber,
+            street_name: input.streetName,
+            city_name: input.cityName,
+            state_name: input.stateName,
+            latitude: input.latitude,
+            longitude: input.longitude,
+            reference: input.reference || undefined,
+          },
         },
-      },
-    });
+      });
+    } catch (err) {
+      if (err.providerStatus === 400 && /already assigned/i.test(err.message)) {
+        const search = await apiRequest(accessToken, `/users/${userId}/stores/search?external_id=${encodeURIComponent(input.externalStoreId)}`);
+        const existing = search.results?.[0] || search.data?.[0] || search[0];
+        if (!existing) throw err;
+        store = existing;
+      } else {
+        throw err;
+      }
+    }
     storeId = String(store.id);
   }
 
@@ -83,8 +95,19 @@ async function configurePointOfSale(accessToken, userId, input) {
       },
     });
   } catch (error) {
-    error.partialConfig = { storeId, externalStoreId: input.externalStoreId };
-    throw error;
+    if (error.providerStatus === 400 && /already assigned/i.test(error.message)) {
+      const search = await apiRequest(accessToken, `/pos/search?external_id=${encodeURIComponent(input.externalPosId)}`);
+      const existing = search.results?.[0] || search.data?.[0] || search[0];
+      if (existing) {
+        pos = existing;
+      } else {
+        error.partialConfig = { storeId, externalStoreId: input.externalStoreId };
+        throw error;
+      }
+    } else {
+      error.partialConfig = { storeId, externalStoreId: input.externalStoreId };
+      throw error;
+    }
   }
 
   return {
