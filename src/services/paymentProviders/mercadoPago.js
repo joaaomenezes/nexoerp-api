@@ -57,7 +57,7 @@ function isLocked(err) {
 }
 
 function isAlreadyAssigned(err) {
-  return err.providerStatus === 400 && /already assigned|already exists|exists$/i.test(err.message);
+  return err.providerStatus === 400 && /already assigned|already exists|point of sale.*exist|exist.*point of sale/i.test(err.message);
 }
 
 async function createStoreWithRetry(accessToken, userId, body, externalStoreId, attempts = 3) {
@@ -86,8 +86,9 @@ async function createPosWithRetry(accessToken, body, externalPosId, attempts = 3
       return await apiRequest(accessToken, '/pos', { method: 'POST', body });
     } catch (err) {
       if (isAlreadyAssigned(err)) {
-        const search = await apiRequest(accessToken, `/pos/search?external_id=${encodeURIComponent(externalPosId)}`);
-        const existing = search.results?.[0] || search.data?.[0] || search[0];
+        const list = await apiRequest(accessToken, '/pos');
+        const items = list.results || list.data || (Array.isArray(list) ? list : []);
+        const existing = items.find(p => p.external_id === externalPosId);
         if (existing) return existing;
         throw err;
       }
