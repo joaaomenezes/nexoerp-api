@@ -4,14 +4,13 @@ const { z } = require('zod');
 const { PrismaClient } = require('@prisma/client');
 const { requireAuth, requirePermission } = require('../middleware/auth');
 const { decryptCredentials } = require('../utils/integrationCrypto');
-const mercadoPago = require('../services/paymentProviders/mercadoPago');
+const { getPaymentProvider } = require('../services/paymentProviders');
 
 const prisma = new PrismaClient();
 
 const chargeSchema = z.object({
   valor: z.number().positive().max(999999.99),
   descricao: z.string().trim().min(1).max(120).optional(),
-  payerEmail: z.string().trim().email().max(150),
 });
 
 function httpError(status, message) {
@@ -24,6 +23,7 @@ function publicCharge(charge) {
   return {
     id: charge.id,
     provedor: charge.provedor,
+    providerResourceId: charge.providerResourceId,
     providerPaymentId: charge.providerPaymentId,
     status: charge.status,
     valor: charge.valor,
@@ -35,14 +35,18 @@ function publicCharge(charge) {
   };
 }
 
-async function getMercadoPagoContext(empresaId) {
+async function getProviderContext(empresaId) {
   const integration = await prisma.integracaoPagamento.findUnique({
     where: { empresaId_tipo: { empresaId, tipo: 'pix' } },
   });
-  if (!integration?.credenciaisCriptografadas || integration.provedor !== 'mercadopago') {
-    throw httpError(409, 'Mercado Pago nao conectado.');
+  if (!integration?.credenciaisCriptografadas || !integration.provedor) {
+    throw httpError(409, 'Provedor PIX nao conectado.');
   }
-  return { integration, credentials: decryptCredentials(integration.credenciaisCriptografadas) };
+  return {
+    integration,
+    credentials: decryptCredentials(integration.credenciaisCriptografadas),
+    provider: getPaymentProvider(integration.provedor),
+  };
 }
 
 function mapProviderStatus(status) {
@@ -58,9 +62,24 @@ function mapProviderStatus(status) {
 }
 
 async function syncChargeStatus(charge) {
-  if (!charge.providerPaymentId || !['criando', 'pendente'].includes(charge.status)) return charge;
-  const { credentials } = await getMercadoPagoContext(charge.empresaId);
-  const payment = await mercadoPago.getPayment(credentials.accessToken, charge.providerPaymentId);
+  if (!['criando', 'pendente', 'reembolso_processando'].includes(charge.status)) return charge;
+  const { credentials, provider } = await getProviderContext(charge.empresaId);
+  if (charge.providerResourceId) {
+    const result = await provider.getCharge(credentials, charge.providerResourceId);
+    const amountMatches = Math.abs(result.amount - charge.valor) < 0.01;
+    const status = amountMatches ? result.status : 'divergente';
+    return prisma.pixCobranca.update({
+      where: { id: charge.id },
+      data: {
+        providerPaymentId: result.providerPaymentId || charge.providerPaymentId,
+        status,
+        pagoEm: status === 'pago' ? (result.paidAt || new Date()) : charge.pagoEm,
+        erro: amountMatches ? null : 'Valor confirmado pelo provedor difere da cobranca.',
+      },
+    });
+  }
+  if (!charge.providerPaymentId) return charge;
+  const payment = await provider.getPayment(credentials.accessToken, charge.providerPaymentId);
   const amountMatches = Math.abs(Number(payment.transaction_amount || 0) - charge.valor) < 0.01;
   const status = amountMatches ? mapProviderStatus(payment.status) : 'divergente';
   return prisma.pixCobranca.update({
@@ -84,17 +103,18 @@ router.post('/cobrancas', async (req, res, next) => {
     const integration = await prisma.integracaoPagamento.findUnique({
       where: { empresaId_tipo: { empresaId: req.auth.empresaId, tipo: 'pix' } },
     });
-    if (!integration?.ativo || integration.status !== 'conectado' || integration.provedor !== 'mercadopago') {
-      throw httpError(409, 'Conecte uma conta Mercado Pago antes de criar a cobranca PIX.');
+    if (!integration?.ativo || integration.status !== 'conectado' || !integration.provedor) {
+      throw httpError(409, 'Conecte e configure um provedor PIX antes de criar a cobranca.');
     }
     if (!integration.credenciaisCriptografadas) throw httpError(409, 'Credenciais do Mercado Pago ausentes.');
 
     const credentials = decryptCredentials(integration.credenciaisCriptografadas);
+    const provider = getPaymentProvider(integration.provedor);
     const reference = `NEXO-${crypto.randomUUID()}`;
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
     charge = await prisma.pixCobranca.create({
       data: {
-        provedor: 'mercadopago',
+        provedor: integration.provedor,
         referencia: reference,
         valor: Math.round(input.valor * 100) / 100,
         expiraEm: expiresAt,
@@ -102,31 +122,30 @@ router.post('/cobrancas', async (req, res, next) => {
       },
     });
 
-    const apiBase = String(process.env.PUBLIC_API_URL || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
-    const payment = await mercadoPago.createPixCharge(credentials.accessToken, {
+    const result = await provider.createCharge(credentials, {
       amount: charge.valor,
       description: input.descricao || `Venda PDV ${charge.id}`,
-      payerEmail: input.payerEmail,
       externalReference: reference,
-      notificationUrl: `${apiBase}/api/webhooks/mercadopago/${integration.id}`,
       expiresAt,
       empresaId: req.auth.empresaId,
       chargeId: charge.id,
       idempotencyKey: reference,
     });
 
-    const transaction = payment.point_of_interaction?.transaction_data;
-    if (!payment.id || !transaction?.qr_code) throw httpError(502, 'Mercado Pago nao retornou o QR Code da cobranca.');
+    if (!result.providerResourceId || !result.qrCode) {
+      throw httpError(502, 'O provedor nao retornou o QR Code da cobranca.');
+    }
 
     charge = await prisma.pixCobranca.update({
       where: { id: charge.id },
       data: {
-        providerPaymentId: String(payment.id),
-        status: payment.status === 'approved' ? 'pago' : 'pendente',
-        qrCode: transaction.qr_code,
-        ticketUrl: transaction.ticket_url || null,
-        expiraEm: payment.date_of_expiration ? new Date(payment.date_of_expiration) : expiresAt,
-        pagoEm: payment.status === 'approved' ? new Date(payment.date_approved || Date.now()) : null,
+        providerResourceId: result.providerResourceId,
+        providerPaymentId: result.providerPaymentId,
+        status: result.status,
+        qrCode: result.qrCode,
+        ticketUrl: null,
+        expiraEm: expiresAt,
+        pagoEm: result.status === 'pago' ? (result.paidAt || new Date()) : null,
       },
     });
 
@@ -152,11 +171,18 @@ router.get('/cobrancas/:id', async (req, res, next) => {
       charge = await syncChargeStatus(charge);
     }
     if (charge.status === 'pendente' && charge.expiraEm && charge.expiraEm <= new Date()) {
-      const { credentials } = await getMercadoPagoContext(req.auth.empresaId);
-      let cancellationAccepted = !charge.providerPaymentId;
-      if (charge.providerPaymentId) {
+      const { credentials, provider } = await getProviderContext(req.auth.empresaId);
+      let cancellationAccepted = !charge.providerResourceId && !charge.providerPaymentId;
+      if (charge.providerResourceId) {
         try {
-          await mercadoPago.cancelPayment(credentials.accessToken, charge.providerPaymentId, `cancel-${charge.id}`);
+          await provider.cancelCharge(credentials, charge.providerResourceId, `cancel-${charge.id}`);
+          cancellationAccepted = true;
+        } catch (_) {
+          cancellationAccepted = false;
+        }
+      } else if (charge.providerPaymentId) {
+        try {
+          await provider.cancelPayment(credentials.accessToken, charge.providerPaymentId, `cancel-${charge.id}`);
           cancellationAccepted = true;
         } catch (_) {
           cancellationAccepted = false;
@@ -188,9 +214,13 @@ router.delete('/cobrancas/:id', async (req, res, next) => {
       return res.json({ ok: true, data: publicCharge(charge) });
     }
 
-    if (charge.providerPaymentId) {
-      const { credentials } = await getMercadoPagoContext(req.auth.empresaId);
-      await mercadoPago.cancelPayment(credentials.accessToken, charge.providerPaymentId, `cancel-${charge.id}`);
+    if (charge.providerResourceId || charge.providerPaymentId) {
+      const { credentials, provider } = await getProviderContext(req.auth.empresaId);
+      if (charge.providerResourceId) {
+        await provider.cancelCharge(credentials, charge.providerResourceId, `cancel-${charge.id}`);
+      } else {
+        await provider.cancelPayment(credentials.accessToken, charge.providerPaymentId, `cancel-${charge.id}`);
+      }
     }
     charge = await prisma.pixCobranca.update({
       where: { id: charge.id },

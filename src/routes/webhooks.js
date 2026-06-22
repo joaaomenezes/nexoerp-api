@@ -2,7 +2,7 @@ const router = require('express').Router();
 const { PrismaClient } = require('@prisma/client');
 const { WebhookSignatureValidator, InvalidWebhookSignatureError } = require('mercadopago');
 const { decryptCredentials } = require('../utils/integrationCrypto');
-const mercadoPago = require('../services/paymentProviders/mercadoPago');
+const { getPaymentProvider } = require('../services/paymentProviders');
 
 const prisma = new PrismaClient();
 
@@ -25,7 +25,38 @@ router.post('/mercadopago/:integrationId', async (req, res, next) => {
       toleranceSeconds: 300,
     });
 
-    const payment = await mercadoPago.getPayment(credentials.accessToken, String(dataId));
+    const provider = getPaymentProvider(integration.provedor);
+    const isOrder = String(dataId).startsWith('ORD') || String(req.body?.action || '').startsWith('order.');
+    if (isOrder) {
+      const result = await provider.getCharge(credentials, String(dataId));
+      const charge = await prisma.pixCobranca.findFirst({
+        where: {
+          empresaId: integration.empresaId,
+          provedor: integration.provedor,
+          OR: [
+            { providerResourceId: String(dataId) },
+            ...(result.externalReference ? [{ referencia: result.externalReference }] : []),
+          ],
+        },
+      });
+      if (!charge) return res.sendStatus(204);
+
+      const amountMatches = Math.abs(result.amount - charge.valor) < 0.01;
+      const status = amountMatches ? result.status : 'divergente';
+      await prisma.pixCobranca.update({
+        where: { id: charge.id },
+        data: {
+          providerResourceId: result.providerResourceId,
+          providerPaymentId: result.providerPaymentId || charge.providerPaymentId,
+          status,
+          pagoEm: status === 'pago' ? (result.paidAt || new Date()) : charge.pagoEm,
+          erro: amountMatches ? null : 'Valor confirmado pelo provedor difere da cobranca.',
+        },
+      });
+      return res.sendStatus(200);
+    }
+
+    const payment = await provider.getPayment(credentials.accessToken, String(dataId));
     const charge = await prisma.pixCobranca.findFirst({
       where: {
         empresaId: integration.empresaId,

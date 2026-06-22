@@ -5,7 +5,7 @@ const { PrismaClient } = require('@prisma/client');
 const { requireAuth, requirePermission } = require('../middleware/auth');
 const { findManyPaginated, sendList } = require('../utils/pagination');
 const { decryptCredentials } = require('../utils/integrationCrypto');
-const mercadoPago = require('../services/paymentProviders/mercadoPago');
+const { getPaymentProvider } = require('../services/paymentProviders');
 
 const prisma = new PrismaClient();
 
@@ -358,40 +358,64 @@ router.put('/:id', async (req, res, next) => {
     // Estorno: devolve estoque + marca lançamento original como estornado
     if (data.status === 'estornada' && (existe.status === 'concluida' || existe.status === 'faturada')) {
       const pixCharges = await prisma.pixCobranca.findMany({
-        where: { empresaId: req.auth.empresaId, vendaId: existe.id, status: 'pago' },
+        where: {
+          empresaId: req.auth.empresaId,
+          vendaId: existe.id,
+          status: { in: ['pago', 'reembolso_processando', 'estornado'] },
+        },
       });
       if (pixCharges.length) {
         const integration = await prisma.integracaoPagamento.findUnique({
           where: { empresaId_tipo: { empresaId: req.auth.empresaId, tipo: 'pix' } },
         });
-        if (!integration?.credenciaisCriptografadas || integration.provedor !== 'mercadopago') {
+        if (!integration?.credenciaisCriptografadas || !integration.provedor) {
           throw httpError(409, 'Nao foi possivel localizar a integracao usada no pagamento PIX.');
         }
         const credentials = decryptCredentials(integration.credenciaisCriptografadas);
+        const provider = getPaymentProvider(integration.provedor);
         for (const charge of pixCharges) {
-          if (!charge.providerPaymentId) throw httpError(409, 'Cobranca PIX sem identificador do provedor.');
+          if (charge.status === 'estornado') continue;
+          if (!charge.providerResourceId && !charge.providerPaymentId) {
+            throw httpError(409, 'Cobranca PIX sem identificador do provedor.');
+          }
+
+          if (charge.status === 'reembolso_processando' && charge.providerResourceId) {
+            const current = await provider.getCharge(credentials, charge.providerResourceId);
+            if (current.status !== 'estornado') {
+              throw httpError(409, 'O reembolso PIX ainda esta sendo processado. Tente novamente em instantes.');
+            }
+            await prisma.pixCobranca.update({
+              where: { id: charge.id },
+              data: { status: 'estornado', erro: null },
+            });
+            continue;
+          }
+
           await prisma.pixCobranca.update({
             where: { id: charge.id },
             data: { status: 'reembolso_processando', erro: null },
           });
           try {
-            await mercadoPago.refundPayment(
-              credentials.accessToken,
-              charge.providerPaymentId,
-              `refund-${charge.id}`
-            );
+            const result = charge.providerResourceId
+              ? await provider.refundCharge(credentials, charge.providerResourceId, `refund-${charge.id}`)
+              : await provider.refundPayment(credentials.accessToken, charge.providerPaymentId, `refund-${charge.id}`);
+            if (charge.providerResourceId && result.status !== 'estornado') {
+              throw httpError(409, 'Reembolso solicitado e ainda em processamento. Tente concluir o estorno em instantes.');
+            }
             await prisma.pixCobranca.update({
               where: { id: charge.id },
               data: { status: 'estornado', erro: null },
             });
           } catch (err) {
+            const processing = err.status === 409 && /processamento|processado/i.test(err.message || '');
             await prisma.pixCobranca.update({
               where: { id: charge.id },
               data: {
-                status: 'pago',
+                status: processing ? 'reembolso_processando' : 'pago',
                 erro: String(err.message || 'Falha no reembolso').slice(0, 500),
               },
             });
+            if (processing) throw err;
             throw httpError(502, 'O Mercado Pago nao confirmou o reembolso. A venda nao foi estornada.');
           }
         }
