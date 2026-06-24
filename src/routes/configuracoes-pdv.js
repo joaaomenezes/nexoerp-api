@@ -12,6 +12,7 @@ const DEFAULT_CONFIG = {
   pixCidade: null,
   terminalOperadora: 'demo',
   terminalId: null,
+  cartaoConfig: {},
   jurosAPartirDe: 4,
   maxParcelas: 12,
   taxaJurosMensal: 0.0299,
@@ -27,6 +28,34 @@ const DEFAULT_CONFIG = {
 
 const PIX_PROVIDERS = ['mercadopago', 'efi', 'asaas', 'pagbank'];
 
+const cardConfigSchema = z.object({
+  nome: z.string().max(80).optional(),
+  operadora: z.string().max(50).optional(),
+  contaRecebimento: z.string().max(120).optional(),
+  status: z.enum(['ativo', 'inativo']).optional(),
+  tiposAceitos: z.object({
+    debito: z.boolean().optional(),
+    creditoVista: z.boolean().optional(),
+    creditoParcelado: z.boolean().optional(),
+    voucher: z.boolean().optional(),
+  }).optional(),
+  bandeirasAceitas: z.array(z.string().max(40)).max(12).optional(),
+  taxaDebito: z.number().min(0).max(100).nullable().optional(),
+  prazoDebitoDias: z.number().int().min(0).max(365).nullable().optional(),
+  taxaCreditoVista: z.number().min(0).max(100).nullable().optional(),
+  prazoCreditoVistaDias: z.number().int().min(0).max(365).nullable().optional(),
+  taxaCreditoParcelado: z.number().min(0).max(100).nullable().optional(),
+  prazoPrimeiraParcelaDias: z.number().int().min(0).max(365).nullable().optional(),
+  intervaloParcelasDias: z.number().int().min(1).max(365).nullable().optional(),
+  nomePdv: z.string().max(80).optional(),
+  exibirNoPdv: z.boolean().optional(),
+  observacoes: z.string().max(1000).optional(),
+  contasBancarias: z.array(z.object({
+    id: z.string().max(80),
+    nome: z.string().max(120),
+  })).max(20).optional(),
+}).passthrough();
+
 const configSchema = z.object({
   pixModo: z.enum(['manual', 'automatico']),
   pixProvedor: z.enum(PIX_PROVIDERS).nullable(),
@@ -37,6 +66,7 @@ const configSchema = z.object({
   pixCidade: z.string().max(15),
   terminalOperadora: z.string().max(50),
   terminalId: z.string().max(100),
+  cartaoConfig: cardConfigSchema.optional(),
   jurosAPartirDe: z.number().int().min(1).max(24),
   maxParcelas: z.number().int().min(1).max(24),
   taxaJurosMensal: z.number().min(0).max(1),
@@ -117,21 +147,79 @@ function normalizePixKey(type, rawKey) {
   return randomKey;
 }
 
+function validateCardConfig(config = {}) {
+  if (!config || Object.keys(config).length === 0) return {};
+  const { contasBancarias: _contasBancarias, ...cardConfig } = config;
+  const tipos = cardConfig.tiposAceitos || {};
+  const missing = [];
+  if (!String(cardConfig.nome || '').trim()) missing.push('nome da configuracao');
+  if (!String(cardConfig.operadora || '').trim()) missing.push('operadora');
+  if (!String(cardConfig.contaRecebimento || '').trim()) missing.push('conta de recebimento');
+  if (!String(cardConfig.status || '').trim()) missing.push('status');
+  if (tipos.debito && (!Number.isFinite(cardConfig.taxaDebito) || !Number.isFinite(cardConfig.prazoDebitoDias))) {
+    missing.push('taxa e prazo de debito');
+  }
+  if (tipos.creditoVista && (!Number.isFinite(cardConfig.taxaCreditoVista) || !Number.isFinite(cardConfig.prazoCreditoVistaDias))) {
+    missing.push('taxa e prazo de credito a vista');
+  }
+  if (tipos.creditoParcelado && (
+    !Number.isFinite(cardConfig.taxaCreditoParcelado)
+    || !Number.isFinite(cardConfig.prazoPrimeiraParcelaDias)
+    || !Number.isFinite(cardConfig.intervaloParcelasDias)
+    || cardConfig.intervaloParcelasDias <= 0
+  )) {
+    missing.push('taxa e prazos do credito parcelado');
+  }
+  if (missing.length) throw httpError(400, `Revise a configuracao de cartao: ${missing.join(', ')}.`);
+  return {
+    ...cardConfig,
+    nome: String(cardConfig.nome || '').trim(),
+    operadora: String(cardConfig.operadora || '').trim(),
+    contaRecebimento: String(cardConfig.contaRecebimento || '').trim(),
+    status: cardConfig.status || 'ativo',
+    nomePdv: String(cardConfig.nomePdv || cardConfig.nome || '').trim(),
+    observacoes: String(cardConfig.observacoes || '').trim(),
+  };
+}
+
+function mapBankAccounts(accounts = []) {
+  const mapped = accounts.map(account => ({
+    id: account.id,
+    nome: account.principal ? `${account.nome} (principal)` : account.nome,
+  }));
+  return mapped.length ? mapped : [{ id: 'conta-principal', nome: 'Conta principal' }];
+}
+
+function withBankAccounts(config, accounts) {
+  const cartaoConfig = config?.cartaoConfig && typeof config.cartaoConfig === 'object' ? config.cartaoConfig : {};
+  return {
+    ...(config || DEFAULT_CONFIG),
+    cartaoConfig: {
+      ...cartaoConfig,
+      contasBancarias: mapBankAccounts(accounts),
+    },
+  };
+}
+
 router.use(requireAuth);
 router.use(requirePermission('pdv'));
 
 router.get('/', async (req, res, next) => {
   try {
-    const [config, integration] = await Promise.all([
+    const [config, integration, contasBancarias] = await Promise.all([
       prisma.configuracaoPDV.findUnique({ where: { empresaId: req.auth.empresaId } }),
       prisma.integracaoPagamento.findUnique({
         where: { empresaId_tipo: { empresaId: req.auth.empresaId, tipo: 'pix' } },
+      }),
+      prisma.contaBancaria.findMany({
+        where: { empresaId: req.auth.empresaId, status: 'ativa' },
+        orderBy: [{ principal: 'desc' }, { nome: 'asc' }],
       }),
     ]);
     res.json({
       ok: true,
       data: {
-        ...(config || DEFAULT_CONFIG),
+        ...withBankAccounts(config, contasBancarias),
         pixModo: integration?.ativo ? 'automatico' : 'manual',
         pixProvedor: integration?.provedor || null,
         pixAmbiente: integration?.ambiente || 'sandbox',
@@ -167,6 +255,7 @@ router.put('/', async (req, res, next) => {
       pixBeneficiario: configInput.pixBeneficiario.trim() || null,
       pixCidade: configInput.pixCidade.trim().toUpperCase() || null,
       terminalId: configInput.terminalId.trim() || null,
+      cartaoConfig: validateCardConfig(configInput.cartaoConfig || {}),
       lojaNome: configInput.lojaNome.trim() || null,
       lojaCnpj: configInput.lojaCnpj.trim() || null,
       lojaRodape: configInput.lojaRodape.trim() || null,
@@ -222,7 +311,10 @@ router.put('/', async (req, res, next) => {
     res.json({
       ok: true,
       data: {
-        ...result.config,
+        ...withBankAccounts(result.config, await prisma.contaBancaria.findMany({
+          where: { empresaId: req.auth.empresaId, status: 'ativa' },
+          orderBy: [{ principal: 'desc' }, { nome: 'asc' }],
+        })),
         pixModo: result.integration?.ativo ? 'automatico' : 'manual',
         pixProvedor: result.integration?.provedor || null,
         pixAmbiente: result.integration?.ambiente || 'sandbox',

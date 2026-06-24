@@ -40,11 +40,35 @@ model Empresa {
   catalogoConfig        CatalogoConfig?
   integracoesPagamento  IntegracaoPagamento[]
   cobrancasPix           PixCobranca[]
+  contasBancarias        ContaBancaria[]
 
   @@map("empresas")
 }
 
 // ─── USUÁRIO ─────────────────────────────────────────────
+// Contas bancarias usadas em recebimentos, conciliacao e configuracoes de maquininhas.
+model ContaBancaria {
+  id           String   @id @default(cuid())
+  nome         String
+  banco        String?
+  agencia      String?
+  conta        String?
+  tipo         String   @default("corrente")
+  chavePix     String?
+  saldoInicial Float    @default(0)
+  principal    Boolean  @default(false)
+  status       String   @default("ativa")
+  observacoes  String?
+  criadoEm     DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  empresaId String
+
+  @@index([empresaId, status])
+  @@map("contas_bancarias")
+}
+
 model Usuario {
   id           String   @id @default(cuid())
   nome         String
@@ -293,6 +317,19 @@ model Lancamento {
   vendaId        String? // referência à venda que gerou este lançamento
   pedidoId       String? // referência ao pedido que gerou este lançamento
   clienteId      String? // referência ao cliente para histórico e filtros
+  caixaId        String?
+  operadorId     String?
+  bandeiraCartao String?
+  adquirenteCartao String?
+  terminalId     String?
+  parcelasCartao Int?
+  parcelaNumero  Int?
+  valorBruto     Float?
+  taxaPercentual Float?
+  valorTaxa      Float?
+  valorLiquidoPrevisto Float?
+  recebidoEm     String?
+  conciliadoEm   String?
   criadoEm       DateTime @default(now())
 
   empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
@@ -458,6 +495,7 @@ model ConfiguracaoPDV {
   pixCidade         String?
   terminalOperadora String   @default("demo")
   terminalId        String?
+  cartaoConfig      Json     @default("{}")
   jurosAPartirDe    Int      @default(4)
   maxParcelas       Int      @default(12)
   taxaJurosMensal   Float    @default(0.0299)

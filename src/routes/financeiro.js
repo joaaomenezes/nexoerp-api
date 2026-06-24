@@ -18,11 +18,24 @@ const lancamentoSchema = z.object({
   vencimento:     z.string().optional(),
   categoria:      z.string().optional(),
   parte:          z.string().optional(), // cliente ou fornecedor envolvido
-  status:         z.enum(['avencer', 'pago', 'vencida']).optional(),
+  status:         z.enum(['avencer', 'pago', 'vencida', 'recebido', 'conciliado', 'cancelado', 'estornado']).optional(),
   obs:            z.string().optional(),
   pagoEm:         z.string().optional(),
   formaPagamento: z.string().optional(),
   clienteId:      z.string().optional(),
+  caixaId:        z.string().optional(),
+  operadorId:     z.string().optional(),
+  bandeiraCartao: z.string().optional(),
+  adquirenteCartao: z.string().optional(),
+  terminalId:     z.string().optional(),
+  parcelasCartao: z.number().int().positive().optional(),
+  parcelaNumero:  z.number().int().positive().optional(),
+  valorBruto:     z.number().min(0).optional(),
+  taxaPercentual: z.number().min(0).optional(),
+  valorTaxa:      z.number().min(0).optional(),
+  valorLiquidoPrevisto: z.number().min(0).optional(),
+  recebidoEm:     z.string().optional(),
+  conciliadoEm:   z.string().optional(),
 });
 
 // ── GET /api/financeiro ───────────────────────────────────
@@ -31,8 +44,12 @@ const lancamentoSchema = z.object({
 // ?clienteId=, ?formaPagamento=, ?pagoInicio=YYYY-MM-DD, ?pagoFim=YYYY-MM-DD
 router.get('/', async (req, res, next) => {
   try {
-    const { tipo, status, q, criadoInicio, criadoFim, clienteId, formaPagamento, pagoInicio, pagoFim, sortBy, excludeStatus } = req.query;
+    const { tipo, status, statusIn, q, criadoInicio, criadoFim, clienteId, formaPagamento, pagoInicio, pagoFim, sortBy, excludeStatus } = req.query;
     const excludedStatuses = String(excludeStatus || '')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean);
+    const includedStatuses = String(statusIn || '')
       .split(',')
       .map(s => s.trim())
       .filter(Boolean);
@@ -40,8 +57,8 @@ router.get('/', async (req, res, next) => {
     const where = {
       empresaId: req.auth.empresaId,
       ...(tipo   && { tipo }),
-      ...(status && { status }),
-      ...(!status && excludedStatuses.length && { status: { notIn: excludedStatuses } }),
+      ...(status ? { status } : (includedStatuses.length ? { status: { in: includedStatuses } } : {})),
+      ...(!status && !includedStatuses.length && excludedStatuses.length && { status: { notIn: excludedStatuses } }),
       ...(clienteId      && { clienteId }),
       ...(formaPagamento && { formaPagamento: { contains: formaPagamento, mode: 'insensitive' } }),
       ...(q && {
@@ -87,11 +104,11 @@ router.get('/resumo', async (req, res, next) => {
 
     const [receitas, despesas] = await Promise.all([
       prisma.lancamento.aggregate({
-        where:  { ...base, tipo: 'receita', status: 'pago' },
+        where:  { ...base, tipo: 'receita', status: { in: ['pago', 'recebido', 'conciliado'] } },
         _sum:   { valor: true },
       }),
       prisma.lancamento.aggregate({
-        where:  { ...base, tipo: 'despesa', status: 'pago' },
+        where:  { ...base, tipo: 'despesa', status: { in: ['pago', 'recebido', 'conciliado'] } },
         _sum:   { valor: true },
       }),
     ]);
@@ -122,7 +139,7 @@ router.get('/resumo-recebimentos', async (req, res, next) => {
     const base = {
       empresaId: req.auth.empresaId,
       tipo:   'receita',
-      status: 'pago',
+      status: { in: ['pago', 'recebido', 'conciliado'] },
       ...(clienteId && { clienteId }),
     };
 

@@ -36,6 +36,13 @@ const pagamentoSchema = z.object({
   cobrancaId:     z.string().optional(),
   providerPaymentId: z.string().optional(),
   provedor:       z.string().optional(),
+  adquirente:     z.string().optional(),
+  terminalId:     z.string().optional(),
+  contaRecebimento: z.string().optional(),
+  maquininhaNome: z.string().optional(),
+  taxaPercentual: z.number().min(0).optional(),
+  prazoPrimeiraParcelaDias: z.number().int().min(0).optional(),
+  intervaloParcelasDias: z.number().int().min(1).optional(),
 }).passthrough();
 
 const vendaSchema = z.object({
@@ -44,6 +51,7 @@ const vendaSchema = z.object({
   clienteId:       z.string().optional(),
   operador:        z.string().optional(),
   operadorId:      z.string().optional(),
+  caixaId:         z.string().optional(),
   metodo:          z.string().optional(),
   pagamentos:      z.array(pagamentoSchema).max(10).optional(),
   itens:           z.array(vendaItemSchema).optional(),
@@ -132,6 +140,123 @@ function buildVendaOrderBy(query) {
   return { [sortBy]: sortDir };
 }
 
+function roundMoney(value) {
+  return Math.round((Number(value) || 0) * 100) / 100;
+}
+
+function isoDatePlusDays(baseISODate, days) {
+  const date = new Date(`${baseISODate}T00:00:00`);
+  date.setDate(date.getDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function normalizePaymentMethod(method) {
+  return String(method || 'dinheiro')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+}
+
+function cardTaxPercent(payment) {
+  if (Number.isFinite(payment.taxaPercentual)) return Number(payment.taxaPercentual);
+  return payment.metodo === 'debito' ? 1.5 : 3;
+}
+
+function cardFirstDueDays(payment) {
+  if (Number.isFinite(payment.prazoPrimeiraParcelaDias)) return Number(payment.prazoPrimeiraParcelaDias);
+  return payment.metodo === 'debito' ? 1 : 30;
+}
+
+function cardInstallmentIntervalDays(payment) {
+  if (Number.isFinite(payment.intervaloParcelasDias)) return Number(payment.intervaloParcelasDias);
+  return 30;
+}
+
+function buildLancamentosVenda({ data, id, tipo, pagamentos, metodoVenda, isFiado, vencFiado, cidFiado, hoje, empresaId }) {
+  const lancamentos = [];
+  const base = {
+    tipo: 'receita',
+    categoria: 'Vendas',
+    parte: data.cliente || null,
+    vendaId: id,
+    caixaId: data.caixaId || null,
+    operadorId: data.operadorId || null,
+    empresaId,
+  };
+
+  pagamentos.forEach((rawPayment) => {
+    const payment = { ...rawPayment, metodo: normalizePaymentMethod(rawPayment.metodo) };
+    const valor = roundMoney(payment.valor);
+    if (valor <= 0) return;
+
+    if (payment.metodo === 'credito' || payment.metodo === 'debito') {
+      const parcelas = payment.metodo === 'debito' ? 1 : Math.max(1, Number(payment.parcelas || 1));
+      const taxaPercentual = cardTaxPercent(payment);
+      const formaPagamento = payment.metodo === 'debito' ? 'cartao_debito' : 'cartao_credito';
+      const adquirente = payment.adquirente || payment.provedor || null;
+      const firstDueDays = cardFirstDueDays(payment);
+      const intervalDays = cardInstallmentIntervalDays(payment);
+      let valorParcelado = 0;
+
+      for (let parcela = 1; parcela <= parcelas; parcela += 1) {
+        const valorBruto = parcela === parcelas
+          ? roundMoney(valor - valorParcelado)
+          : roundMoney(valor / parcelas);
+        valorParcelado = roundMoney(valorParcelado + valorBruto);
+        const valorTaxa = roundMoney(valorBruto * (taxaPercentual / 100));
+        const valorLiquido = roundMoney(valorBruto - valorTaxa);
+        const vencimento = isoDatePlusDays(hoje, firstDueDays + (intervalDays * (parcela - 1)));
+
+        lancamentos.push({
+          ...base,
+          descricao: parcelas > 1
+            ? `Venda PDV ${id} - cartao credito ${parcela}/${parcelas}`
+            : `Venda PDV ${id} - ${formaPagamento}`,
+          valor: valorBruto,
+          status: 'avencer',
+          vencimento,
+          pagoEm: null,
+          formaPagamento,
+          bandeiraCartao: payment.bandeira || null,
+          adquirenteCartao: adquirente,
+          terminalId: payment.terminalId || null,
+          parcelasCartao: parcelas,
+          parcelaNumero: parcela,
+          valorBruto,
+          taxaPercentual,
+          valorTaxa,
+          valorLiquidoPrevisto: valorLiquido,
+          clienteId: null,
+          obs: [
+            `Taxa prevista: ${taxaPercentual.toFixed(2)}%. Liquido previsto: R$ ${valorLiquido.toFixed(2)}`,
+            payment.maquininhaNome ? `Maquininha: ${payment.maquininhaNome}` : null,
+            payment.contaRecebimento ? `Conta recebimento: ${payment.contaRecebimento}` : null,
+          ].filter(Boolean).join(' | '),
+        });
+      }
+      return;
+    }
+
+    const fiadoPayment = payment.metodo === 'fiado';
+    lancamentos.push({
+      ...base,
+      descricao: tipo === 'pdv'
+        ? `Venda PDV ${id}${pagamentos.length > 1 ? ` - ${payment.metodo}` : ''}`
+        : `Venda pedido ${id}${pagamentos.length > 1 ? ` - ${payment.metodo}` : ''}`,
+      valor,
+      status: fiadoPayment ? 'avencer' : 'pago',
+      vencimento: fiadoPayment ? (payment.vencimento || vencFiado || hoje) : hoje,
+      pagoEm: fiadoPayment ? null : hoje,
+      formaPagamento: payment.metodo || metodoVenda || null,
+      obs: null,
+      clienteId: fiadoPayment ? (cidFiado || null) : null,
+    });
+  });
+
+  return lancamentos;
+}
+
 // ── GET /api/vendas ───────────────────────────────────────
 router.get('/', async (req, res, next) => {
   try {
@@ -195,7 +320,7 @@ router.post('/', async (req, res, next) => {
     const tipo = data.tipo ?? 'pdv';
 
     const metodo   = String(data.metodo || 'dinheiro').toLowerCase();
-    const isFiado  = metodo === 'fiado';
+    const isFiado  = metodo === 'fiado' || data.pagamentos?.some(payment => payment.metodo === 'fiado');
     const cidFiado = data.clienteId || data.fiado?.clienteId;
     const vencFiado = data.vencimentoFiado || data.fiado?.vencimento;
     const pagamentos = data.pagamentos?.length
@@ -283,7 +408,7 @@ router.post('/', async (req, res, next) => {
       }
 
       // 2. Cria a venda (exclui campos do fiado que não pertencem ao modelo Venda)
-      const { vencimentoFiado: _vf, fiado: _fi, ...vendaFields } = data;
+      const { vencimentoFiado: _vf, fiado: _fi, caixaId: _caixaId, ...vendaFields } = data;
       const novaVenda = await tx.venda.create({
         data: {
           ...vendaFields,
@@ -314,25 +439,21 @@ router.post('/', async (req, res, next) => {
         });
       }
 
-      // 4. Cria lançamento de receita no financeiro vinculado à venda
+      // 4. Cria lançamentos financeiros por forma de pagamento.
       const hoje = new Date().toISOString().slice(0, 10);
-      await tx.lancamento.create({
-        data: {
-          tipo:           'receita',
-          descricao:      tipo === 'pdv' ? `Venda PDV ${id}` : `Venda pedido ${id}`,
-          valor:          data.total ?? 0,
-          categoria:      'Vendas',
-          parte:          data.cliente || null,
-          status:         isFiado ? 'avencer' : 'pago',
-          vencimento:     isFiado ? (vencFiado || hoje) : hoje,
-          pagoEm:         isFiado ? null : hoje,
-          formaPagamento: metodoVenda || null,
-          obs:            null,
-          vendaId:        id,
-          clienteId:      cidFiado || null,
-          empresaId:      req.auth.empresaId,
-        },
+      const lancamentos = buildLancamentosVenda({
+        data,
+        id,
+        tipo,
+        pagamentos,
+        metodoVenda,
+        isFiado,
+        vencFiado,
+        cidFiado,
+        hoje,
+        empresaId: req.auth.empresaId,
       });
+      if (lancamentos.length) await tx.lancamento.createMany({ data: lancamentos });
 
       return novaVenda;
     });
