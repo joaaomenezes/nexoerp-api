@@ -11,6 +11,7 @@ const mercadoPagoSchema = z.object({
   accessToken: z.string().trim().min(20).max(300).optional(),
   webhookSecret: z.string().trim().max(300).optional().default(''),
   ambiente: z.enum(['sandbox', 'producao']),
+  contaBancariaId: z.string().trim().max(80).optional().nullable(),
 });
 
 const mercadoPagoQrSchema = z.object({
@@ -46,6 +47,7 @@ function publicIntegration(integration, credentials = {}) {
     status: integration.status,
     ativo: integration.ativo,
     contaExternaId: integration.contaExternaId,
+    contaBancariaId: integration.contaBancariaId,
     qrConfigured: Boolean(credentials.externalPosId),
     webhookPath: `/api/webhooks/mercadopago/${integration.id}`,
     atualizadoEm: integration.atualizadoEm,
@@ -108,6 +110,7 @@ router.put('/mercadopago', requireOwner, async (req, res, next) => {
         credenciaisCriptografadas: encrypted,
         webhookSecret: null,
         contaExternaId: account.id,
+        contaBancariaId: input.contaBancariaId || existing?.contaBancariaId || null,
       },
       create: {
         tipo: 'pix',
@@ -117,6 +120,7 @@ router.put('/mercadopago', requireOwner, async (req, res, next) => {
         ativo: true,
         credenciaisCriptografadas: encrypted,
         contaExternaId: account.id,
+        contaBancariaId: input.contaBancariaId || null,
         empresaId: req.auth.empresaId,
       },
     });
@@ -227,6 +231,7 @@ router.delete('/', requireOwner, async (req, res, next) => {
         credenciaisCriptografadas: hasPreserved ? encryptCredentials(preservedCredentials) : null,
         webhookSecret: null,
         contaExternaId: null,
+        contaBancariaId: null,
       },
     });
     res.json({ ok: true, data: null });

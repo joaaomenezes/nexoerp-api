@@ -60,6 +60,7 @@ const configSchema = z.object({
   pixModo: z.enum(['manual', 'automatico']),
   pixProvedor: z.enum(PIX_PROVIDERS).nullable(),
   pixAmbiente: z.enum(['sandbox', 'producao']),
+  pixContaBancariaId: z.string().max(80).optional().nullable(),
   pixTipoChave: z.enum(['cpf', 'cnpj', 'email', 'telefone', 'aleatoria']),
   pixChave: z.string().max(100),
   pixBeneficiario: z.string().max(25),
@@ -224,6 +225,7 @@ router.get('/', async (req, res, next) => {
         pixProvedor: integration?.provedor || null,
         pixAmbiente: integration?.ambiente || 'sandbox',
         pixStatus: integration?.status || 'desconectado',
+        pixContaBancariaId: integration?.contaBancariaId || null,
         pixWebhookPath: integration ? `/api/webhooks/mercadopago/${integration.id}` : null,
       },
     });
@@ -239,7 +241,7 @@ router.put('/', async (req, res, next) => {
     }
 
     const input = configSchema.parse(req.body);
-    const { pixModo, pixProvedor, pixAmbiente, ...configInput } = input;
+    const { pixModo, pixProvedor, pixAmbiente, pixContaBancariaId, ...configInput } = input;
     if (pixModo === 'automatico' && !pixProvedor) {
       throw httpError(400, 'Selecione um provedor para usar o PIX automatico.');
     }
@@ -283,6 +285,7 @@ router.put('/', async (req, res, next) => {
             provedor: pixProvedor,
             ambiente: pixAmbiente,
             ativo: pixModo === 'automatico',
+            contaBancariaId: pixContaBancariaId || null,
             ...(integrationChanged ? {
               status: 'desconectado',
               credenciaisCriptografadas: null,
@@ -295,6 +298,7 @@ router.put('/', async (req, res, next) => {
             provedor: pixProvedor,
             ambiente: pixAmbiente,
             ativo: pixModo === 'automatico',
+            contaBancariaId: pixContaBancariaId || null,
             empresaId: req.auth.empresaId,
           },
         });
@@ -319,6 +323,7 @@ router.put('/', async (req, res, next) => {
         pixProvedor: result.integration?.provedor || null,
         pixAmbiente: result.integration?.ambiente || 'sandbox',
         pixStatus: result.integration?.status || 'desconectado',
+        pixContaBancariaId: result.integration?.contaBancariaId || null,
         pixWebhookPath: result.integration ? `/api/webhooks/mercadopago/${result.integration.id}` : null,
       },
     });

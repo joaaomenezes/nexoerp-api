@@ -23,6 +23,7 @@ const lancamentoSchema = z.object({
   pagoEm:         z.string().optional(),
   formaPagamento: z.string().optional(),
   clienteId:      z.string().optional(),
+  contaBancariaId: z.string().optional(),
   caixaId:        z.string().optional(),
   operadorId:     z.string().optional(),
   bandeiraCartao: z.string().optional(),

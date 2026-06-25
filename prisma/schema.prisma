@@ -317,6 +317,7 @@ model Lancamento {
   vendaId        String? // referência à venda que gerou este lançamento
   pedidoId       String? // referência ao pedido que gerou este lançamento
   clienteId      String? // referência ao cliente para histórico e filtros
+  contaBancariaId String?
   caixaId        String?
   operadorId     String?
   bandeiraCartao String?
@@ -528,6 +529,7 @@ model IntegracaoPagamento {
   credenciaisCriptografadas String?
   webhookSecret             String?
   contaExternaId            String?
+  contaBancariaId           String?
   criadoEm                  DateTime @default(now())
   atualizadoEm              DateTime @updatedAt
 
