@@ -48,7 +48,14 @@ JWT_SECRET="<frase secreta — peça ao dono do projeto>"
 INTEGRATION_ENCRYPTION_KEY="<chave aleatória com pelo menos 32 caracteres>"
 PUBLIC_API_URL="http://localhost:3333"
 PORT=3333
+CORS_ORIGIN="http://127.0.0.1:5500,http://localhost:5500"
+AUTH_RATE_LIMIT_MAX=40
+LOGIN_RATE_LIMIT_MAX=8
+REGISTER_RATE_LIMIT_MAX=5
 ```
+
+Em producao, configure `CORS_ORIGIN` no Railway com os dominios reais do frontend, separados por virgula. Exemplo: `https://nexoerp.netlify.app,https://seudominio.com.br`.
+Os limites de auth sao opcionais. Se nao forem configurados, a API usa os padroes acima: 40 tentativas gerais de auth, 8 tentativas por login/identificador e 5 cadastros por IP.
 
 > O `.env` guarda segredos (senha do banco, chave do JWT). Ele **nunca** é enviado pro GitHub — por isso você precisa criá-lo em cada máquina. Peça os valores ao João.
 

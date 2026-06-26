@@ -5,6 +5,11 @@ const { z }   = require('zod');
 const { PrismaClient } = require('@prisma/client');
 
 const { requireAuth } = require('../middleware/auth');
+const {
+  authIpRateLimit,
+  loginCredentialRateLimit,
+  registerRateLimit,
+} = require('../middleware/rateLimit');
 
 const prisma = new PrismaClient();
 
@@ -30,7 +35,7 @@ const registerSchema = z.object({
   funcionarios: z.string().optional(),
 });
 
-router.post('/register', async (req, res, next) => {
+router.post('/register', registerRateLimit, async (req, res, next) => {
   try {
     const data = registerSchema.parse(req.body);
 
@@ -97,7 +102,7 @@ const loginSchema = z.object({
   rememberMe: z.boolean().optional(),
 });
 
-router.post('/login', async (req, res, next) => {
+router.post('/login', authIpRateLimit, loginCredentialRateLimit, async (req, res, next) => {
   try {
     const { identifier, password, rememberMe } = loginSchema.parse(req.body);
 
