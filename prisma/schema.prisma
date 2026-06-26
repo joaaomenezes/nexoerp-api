@@ -281,6 +281,7 @@ model Venda {
   clienteId     String?
   operador      String?
   operadorId    String?
+  caixaId       String?
   metodo        String?
   pagamentos    Json     @default("[]")
   itens         Json     @default("[]")
@@ -297,7 +298,9 @@ model Venda {
 
   empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
   empresaId String
+  caixa     Caixa?  @relation(fields: [caixaId], references: [id], onDelete: SetNull)
 
+  @@index([empresaId, caixaId])
   @@map("vendas")
 }
 
@@ -419,6 +422,7 @@ model Caixa {
 
   empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
   empresaId String
+  vendas    Venda[]
 
   @@map("caixas")
 }

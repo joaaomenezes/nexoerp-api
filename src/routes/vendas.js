@@ -335,6 +335,10 @@ router.post('/', async (req, res, next) => {
         }];
     const metodoVenda = pagamentos.length > 1 ? 'multiplo' : metodo;
 
+    if (tipo === 'pdv' && !data.caixaId) {
+      return next(httpError(409, 'Abra o caixa antes de registrar uma venda no PDV.'));
+    }
+
     if (isFiado) {
       if (!cidFiado) {
         return next(httpError(400, 'Para venda fiado, selecione ou cadastre um cliente e informe o vencimento.'));
@@ -368,6 +372,23 @@ router.post('/', async (req, res, next) => {
     }
 
     const venda = await prisma.$transaction(async (tx) => {
+      if (tipo === 'pdv') {
+        const caixaAberto = await tx.caixa.findFirst({
+          where: {
+            id: data.caixaId,
+            empresaId: req.auth.empresaId,
+            operadorId: req.auth.userId,
+            aberto: true,
+          },
+        });
+
+        if (!caixaAberto) {
+          throw httpError(409, 'Caixa fechado ou nao pertence ao operador atual. Abra um caixa para continuar.');
+        }
+
+        data.operadorId = req.auth.userId;
+        data.operador = data.operador || caixaAberto.operador || req.auth.nome || 'Operador';
+      }
       // 1. Decrementa estoque e incrementa vendas + cria movimentação por item
       if (data.itens && data.itens.length > 0) {
         for (const item of data.itens) {
@@ -411,7 +432,7 @@ router.post('/', async (req, res, next) => {
       }
 
       // 2. Cria a venda (exclui campos do fiado que não pertencem ao modelo Venda)
-      const { vencimentoFiado: _vf, fiado: _fi, caixaId: _caixaId, ...vendaFields } = data;
+      const { vencimentoFiado: _vf, fiado: _fi, ...vendaFields } = data;
       const novaVenda = await tx.venda.create({
         data: {
           ...vendaFields,
