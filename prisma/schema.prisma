@@ -516,6 +516,7 @@ model ConfiguracaoPDV {
   lojaNome          String?
   lojaCnpj          String?
   lojaRodape        String?
+  supervisorPinHash String?
   criadoEm          DateTime @default(now())
   atualizadoEm      DateTime @updatedAt
 

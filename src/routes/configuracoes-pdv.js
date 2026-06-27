@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const { z } = require('zod');
 const { PrismaClient } = require('@prisma/client');
+const bcrypt = require('bcryptjs');
 const { requireAuth, requirePermission } = require('../middleware/auth');
 
 const prisma = new PrismaClient();
@@ -79,6 +80,10 @@ const configSchema = z.object({
   lojaNome: z.string().max(100),
   lojaCnpj: z.string().max(30),
   lojaRodape: z.string().max(200),
+});
+
+const supervisorPinSchema = z.object({
+  pin: z.string().regex(/^\d{4}$/).or(z.literal('')),
 });
 
 function httpError(status, message) {
@@ -192,13 +197,15 @@ function mapBankAccounts(accounts = []) {
 }
 
 function withBankAccounts(config, accounts) {
+  const { supervisorPinHash, ...safeConfig } = config || DEFAULT_CONFIG;
   const cartaoConfig = config?.cartaoConfig && typeof config.cartaoConfig === 'object' ? config.cartaoConfig : {};
   return {
-    ...(config || DEFAULT_CONFIG),
+    ...safeConfig,
     cartaoConfig: {
       ...cartaoConfig,
       contasBancarias: mapBankAccounts(accounts),
     },
+    supervisorPinConfigured: Boolean(supervisorPinHash),
   };
 }
 
@@ -326,6 +333,30 @@ router.put('/', async (req, res, next) => {
         pixContaBancariaId: result.integration?.contaBancariaId || null,
         pixWebhookPath: result.integration ? `/api/webhooks/mercadopago/${result.integration.id}` : null,
       },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.put('/supervisor-pin', async (req, res, next) => {
+  try {
+    if (!req.auth.isDono && req.auth.permissions !== null) {
+      throw httpError(403, 'Apenas o dono pode alterar o PIN de supervisor.');
+    }
+
+    const { pin } = supervisorPinSchema.parse(req.body);
+    const supervisorPinHash = pin ? await bcrypt.hash(pin, 10) : null;
+
+    await prisma.configuracaoPDV.upsert({
+      where: { empresaId: req.auth.empresaId },
+      update: { supervisorPinHash },
+      create: { ...DEFAULT_CONFIG, supervisorPinHash, empresaId: req.auth.empresaId },
+    });
+
+    res.json({
+      ok: true,
+      data: { supervisorPinConfigured: Boolean(supervisorPinHash) },
     });
   } catch (err) {
     next(err);

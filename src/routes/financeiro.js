@@ -4,6 +4,10 @@ const { PrismaClient } = require('@prisma/client');
 
 const { requireAuth, requirePermission } = require('../middleware/auth');
 const { findManyPaginated, sendList } = require('../utils/pagination');
+const {
+  FINANCEIRO_STATUS_REALIZADOS,
+  FINANCEIRO_STATUS_VALIDOS,
+} = require('../utils/financeiroStatus');
 
 const prisma = new PrismaClient();
 
@@ -18,7 +22,7 @@ const lancamentoSchema = z.object({
   vencimento:     z.string().optional(),
   categoria:      z.string().optional(),
   parte:          z.string().optional(), // cliente ou fornecedor envolvido
-  status:         z.enum(['avencer', 'pago', 'vencida', 'recebido', 'conciliado', 'cancelado', 'estornado']).optional(),
+  status:         z.enum(FINANCEIRO_STATUS_VALIDOS).optional(),
   obs:            z.string().optional(),
   pagoEm:         z.string().optional(),
   formaPagamento: z.string().optional(),
@@ -105,11 +109,11 @@ router.get('/resumo', async (req, res, next) => {
 
     const [receitas, despesas] = await Promise.all([
       prisma.lancamento.aggregate({
-        where:  { ...base, tipo: 'receita', status: { in: ['pago', 'recebido', 'conciliado'] } },
+        where:  { ...base, tipo: 'receita', status: { in: FINANCEIRO_STATUS_REALIZADOS } },
         _sum:   { valor: true },
       }),
       prisma.lancamento.aggregate({
-        where:  { ...base, tipo: 'despesa', status: { in: ['pago', 'recebido', 'conciliado'] } },
+        where:  { ...base, tipo: 'despesa', status: { in: FINANCEIRO_STATUS_REALIZADOS } },
         _sum:   { valor: true },
       }),
     ]);
@@ -140,7 +144,7 @@ router.get('/resumo-recebimentos', async (req, res, next) => {
     const base = {
       empresaId: req.auth.empresaId,
       tipo:   'receita',
-      status: { in: ['pago', 'recebido', 'conciliado'] },
+      status: { in: FINANCEIRO_STATUS_REALIZADOS },
       ...(clienteId && { clienteId }),
     };
 

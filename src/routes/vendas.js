@@ -1,11 +1,13 @@
 const router = require('express').Router();
 const { z }  = require('zod');
 const { PrismaClient } = require('@prisma/client');
+const bcrypt = require('bcryptjs');
 
 const { requireAuth, requirePermission } = require('../middleware/auth');
 const { findManyPaginated, sendList } = require('../utils/pagination');
 const { decryptCredentials } = require('../utils/integrationCrypto');
 const { getPaymentProvider } = require('../services/paymentProviders');
+const { FINANCEIRO_STATUS, FINANCEIRO_STATUS_ABERTOS } = require('../utils/financeiroStatus');
 
 const prisma = new PrismaClient();
 
@@ -66,6 +68,7 @@ const vendaSchema = z.object({
   dataStr:         z.string().optional(),
   horaStr:         z.string().optional(),
   vencimentoFiado: z.string().optional(),
+  supervisorPin:   z.string().regex(/^\d{4}$/).optional(),
   fiado:           z.object({
     clienteId:  z.string().optional(),
     vencimento: z.string().optional(),
@@ -76,6 +79,90 @@ function httpError(status, message) {
   const err = new Error(message);
   err.status = status;
   return err;
+}
+
+function roundMoney(value) {
+  return Math.round((Number(value) || 0) * 100) / 100;
+}
+
+function fiadoTotal(pagamentos, fallbackTotal = 0) {
+  const fiadoPayments = (pagamentos || []).filter(payment => payment.metodo === 'fiado');
+  if (fiadoPayments.length) {
+    return roundMoney(fiadoPayments.reduce((sum, payment) => sum + Number(payment.valor || 0), 0));
+  }
+  return roundMoney(fallbackTotal);
+}
+
+async function validarLimiteCreditoFiado(tx, { empresaId, clienteId, valorFiado, supervisorPin }) {
+  const cliente = await tx.cliente.findFirst({
+    where: { id: clienteId, empresaId, secao: 'clientes' },
+    select: { id: true, nome: true, limite: true },
+  });
+
+  if (!cliente) throw httpError(404, 'Cliente do fiado nao encontrado.');
+
+  const vendas = await tx.venda.findMany({
+    where: { clienteId, empresaId },
+    select: { id: true },
+  });
+  const vendaIds = vendas.map(venda => venda.id).filter(Boolean);
+
+  const agg = await tx.lancamento.aggregate({
+    _sum: { valor: true },
+    where: {
+      empresaId,
+      tipo: 'receita',
+      status: { in: FINANCEIRO_STATUS_ABERTOS },
+      OR: [
+        { clienteId },
+        ...(vendaIds.length ? [{ vendaId: { in: vendaIds } }] : []),
+      ],
+    },
+  });
+
+  const limiteCredito = roundMoney(cliente.limite || 0);
+  const totalEmAberto = roundMoney(agg._sum.valor || 0);
+  const novoTotalEmAberto = roundMoney(totalEmAberto + valorFiado);
+  const limiteDisponivel = roundMoney(limiteCredito - totalEmAberto);
+  const excedente = roundMoney(novoTotalEmAberto - limiteCredito);
+
+  if (limiteCredito > 0 && novoTotalEmAberto <= limiteCredito) {
+    return { autorizadoPorSupervisor: false };
+  }
+
+  const config = await tx.configuracaoPDV.findUnique({
+    where: { empresaId },
+    select: { supervisorPinHash: true },
+  });
+
+  if (!config?.supervisorPinHash) {
+    throw httpError(409, 'Limite de credito excedido e PIN de supervisor nao configurado.');
+  }
+
+  if (!supervisorPin) {
+    const err = httpError(409, 'Limite de credito excedido. Solicite liberacao com PIN de supervisor.');
+    err.code = 'CREDIT_LIMIT_EXCEEDED';
+    err.data = {
+      clienteId,
+      clienteNome: cliente.nome,
+      limiteCredito,
+      totalEmAberto,
+      novaVendaFiado: valorFiado,
+      novoTotalEmAberto,
+      limiteDisponivel,
+      excedente,
+    };
+    throw err;
+  }
+
+  const pinOk = await bcrypt.compare(supervisorPin, config.supervisorPinHash);
+  if (!pinOk) {
+    const err = httpError(403, 'PIN de supervisor incorreto.');
+    err.code = 'INVALID_SUPERVISOR_PIN';
+    throw err;
+  }
+
+  return { autorizadoPorSupervisor: true };
 }
 
 function buildVendaWhere(req) {
@@ -215,7 +302,7 @@ function buildLancamentosVenda({ data, id, tipo, pagamentos, metodoVenda, isFiad
             ? `Venda PDV ${id} - cartao credito ${parcela}/${parcelas}`
             : `Venda PDV ${id} - ${formaPagamento}`,
           valor: valorBruto,
-          status: 'avencer',
+          status: FINANCEIRO_STATUS.A_VENCER,
           vencimento,
           pagoEm: null,
           formaPagamento,
@@ -247,7 +334,7 @@ function buildLancamentosVenda({ data, id, tipo, pagamentos, metodoVenda, isFiad
         ? `Venda PDV ${id}${pagamentos.length > 1 ? ` - ${payment.metodo}` : ''}`
         : `Venda pedido ${id}${pagamentos.length > 1 ? ` - ${payment.metodo}` : ''}`,
       valor,
-      status: fiadoPayment ? 'avencer' : 'pago',
+      status: fiadoPayment ? FINANCEIRO_STATUS.A_VENCER : FINANCEIRO_STATUS.PAGO,
       vencimento: fiadoPayment ? (payment.vencimento || vencFiado || hoje) : hoje,
       pagoEm: fiadoPayment ? null : hoje,
       formaPagamento: payment.metodo || metodoVenda || null,
@@ -389,6 +476,15 @@ router.post('/', async (req, res, next) => {
         data.operadorId = req.auth.userId;
         data.operador = data.operador || caixaAberto.operador || req.auth.nome || 'Operador';
       }
+
+      if (isFiado) {
+        await validarLimiteCreditoFiado(tx, {
+          empresaId: req.auth.empresaId,
+          clienteId: cidFiado,
+          valorFiado: fiadoTotal(pagamentos, data.total ?? 0),
+          supervisorPin: data.supervisorPin,
+        });
+      }
       // 1. Decrementa estoque e incrementa vendas + cria movimentação por item
       if (data.itens && data.itens.length > 0) {
         for (const item of data.itens) {
@@ -432,7 +528,7 @@ router.post('/', async (req, res, next) => {
       }
 
       // 2. Cria a venda (exclui campos do fiado que não pertencem ao modelo Venda)
-      const { vencimentoFiado: _vf, fiado: _fi, ...vendaFields } = data;
+      const { vencimentoFiado: _vf, fiado: _fi, supervisorPin: _sp, ...vendaFields } = data;
       const novaVenda = await tx.venda.create({
         data: {
           ...vendaFields,
@@ -593,7 +689,7 @@ router.put('/:id', async (req, res, next) => {
         // 2. Marca o lançamento original como estornado (sem criar novo registro)
         await tx.lancamento.updateMany({
           where: { vendaId: existe.id, empresaId: req.auth.empresaId },
-          data:  { status: 'estornado', obs: data.estornoMotivo || null },
+          data:  { status: FINANCEIRO_STATUS.ESTORNADO, obs: data.estornoMotivo || null },
         });
 
         await tx.venda.update({

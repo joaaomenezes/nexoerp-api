@@ -4,6 +4,7 @@ const { PrismaClient } = require('@prisma/client');
 
 const { requireAuth, requirePermission } = require('../middleware/auth');
 const { findManyPaginated, sendList } = require('../utils/pagination');
+const { FINANCEIRO_STATUS_ABERTOS } = require('../utils/financeiroStatus');
 
 const prisma = new PrismaClient();
 
@@ -153,7 +154,7 @@ router.get('/:id/credito', async (req, res, next) => {
       where: {
         empresaId: req.auth.empresaId,
         tipo: 'receita',
-        status: { in: ['avencer', 'vencida'] },
+        status: { in: FINANCEIRO_STATUS_ABERTOS },
         vendaId: { in: vendaIds.length ? vendaIds : ['__noop__'] },
       },
     });

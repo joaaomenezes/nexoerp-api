@@ -2,6 +2,10 @@ const router = require('express').Router();
 const { PrismaClient } = require('@prisma/client');
 const { requireAuth } = require('../middleware/auth');
 const { findManyPaginated, sendList } = require('../utils/pagination');
+const {
+  FINANCEIRO_STATUS_INATIVOS,
+  isStatusFinanceiroRealizado,
+} = require('../utils/financeiroStatus');
 
 const prisma = new PrismaClient();
 
@@ -64,7 +68,7 @@ async function buildCaixaResumo(db, empresaId, caixa) {
         empresaId,
         caixaId: caixa.id,
         tipo: 'receita',
-        status: { notIn: ['cancelado', 'estornado'] },
+        status: { notIn: FINANCEIRO_STATUS_INATIVOS },
       },
       select: {
         id: true,
@@ -89,7 +93,6 @@ async function buildCaixaResumo(db, empresaId, caixa) {
     outros:   { count: 0, total: 0 },
   };
 
-  const statusRecebidos = new Set(['pago', 'recebido', 'conciliado']);
   let totalRecebido = 0;
   let totalAReceber = 0;
   let taxasCartao = 0;
@@ -106,7 +109,7 @@ async function buildCaixaResumo(db, empresaId, caixa) {
     formas[bucket].count += 1;
     formas[bucket].total = roundMoney(formas[bucket].total + valor);
 
-    if (statusRecebidos.has(lancamento.status)) {
+    if (isStatusFinanceiroRealizado(lancamento.status)) {
       totalRecebido = roundMoney(totalRecebido + valor);
     } else {
       totalAReceber = roundMoney(totalAReceber + valor);

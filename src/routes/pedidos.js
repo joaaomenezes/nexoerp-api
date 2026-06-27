@@ -4,6 +4,7 @@ const { PrismaClient } = require('@prisma/client');
 
 const { requireAuth, requirePermission } = require('../middleware/auth');
 const { findManyPaginated, sendList } = require('../utils/pagination');
+const { FINANCEIRO_STATUS } = require('../utils/financeiroStatus');
 
 const prisma = new PrismaClient();
 
@@ -78,7 +79,7 @@ function buildLancamentoPedido(pedido, statusDestino) {
   const recebido = isPedidoRecebido(statusDestino, pedido.condicao);
   const data = todayISO();
   return {
-    status: recebido ? 'pago' : 'avencer',
+    status: recebido ? FINANCEIRO_STATUS.PAGO : FINANCEIRO_STATUS.A_VENCER,
     vencimento: recebido ? data : firstVencimento(pedido),
     pagoEm: recebido ? data : null,
   };
@@ -244,7 +245,7 @@ router.put('/:id', async (req, res, next) => {
           await tx.lancamento.updateMany({
             where: { pedidoId: req.params.id, empresaId: req.auth.empresaId },
             data: {
-              status: 'pago',
+              status: FINANCEIRO_STATUS.PAGO,
               vencimento: hoje,
               pagoEm: hoje,
               formaPagamento: existe.forma || null,
@@ -529,7 +530,7 @@ router.delete('/:id', async (req, res, next) => {
 
         await tx.lancamento.updateMany({
           where: { pedidoId: req.params.id, empresaId: req.auth.empresaId },
-          data:  { status: 'estornado' },
+          data:  { status: FINANCEIRO_STATUS.ESTORNADO },
         });
       }
 
