@@ -10,6 +10,14 @@ const {
   loginCredentialRateLimit,
   registerRateLimit,
 } = require('../middleware/rateLimit');
+const {
+  buildVerificationUrl,
+  createVerificationToken,
+  emailVerificationRequired,
+  hashVerificationToken,
+  sendVerificationEmail,
+  verificationExpiresAt,
+} = require('../services/emailVerification');
 
 const prisma = new PrismaClient();
 
@@ -19,6 +27,47 @@ function signToken(user, empresaId, rememberMe = false) {
     process.env.JWT_SECRET,
     { expiresIn: rememberMe ? '30d' : '8h' }
   );
+}
+
+function authUserPayload(usuario, empresa) {
+  return {
+    id:          usuario.id,
+    nome:        usuario.nome,
+    username:    usuario.username,
+    email:       usuario.email,
+    isDono:      usuario.isDono,
+    permissions: usuario.permissions,
+    empresaId:   usuario.empresaId || empresa?.id,
+    company:     empresa?.nome || '',
+    emailVerificado: usuario.emailVerificado,
+  };
+}
+
+async function prepareEmailVerification(tx, usuarioId) {
+  const token = createVerificationToken();
+  const tokenHash = hashVerificationToken(token);
+  const expiresAt = verificationExpiresAt();
+
+  await tx.usuario.update({
+    where: { id: usuarioId },
+    data: {
+      emailVerificado: false,
+      emailVerificadoEm: null,
+      emailVerificationTokenHash: tokenHash,
+      emailVerificationExpiresAt: expiresAt,
+    },
+  });
+
+  return { token, tokenHash, expiresAt };
+}
+
+function verificationResponseMeta(emailResult, verificationUrl) {
+  const includeDevLink = process.env.NODE_ENV !== 'production' || process.env.EMAIL_VERIFICATION_EXPOSE_DEV_LINK === 'true';
+  return {
+    emailSent: !!emailResult?.sent,
+    emailProvider: emailResult?.provider || null,
+    ...(includeDevLink ? { verificationUrl } : {}),
+  };
 }
 
 // ── POST /api/auth/register ───────────────────────────────
@@ -38,6 +87,7 @@ const registerSchema = z.object({
 router.post('/register', registerRateLimit, async (req, res, next) => {
   try {
     const data = registerSchema.parse(req.body);
+    const requireEmailVerification = emailVerificationRequired();
 
     const emailTaken = await prisma.usuario.findFirst({
       where: { email: data.email.toLowerCase() },
@@ -67,28 +117,56 @@ router.post('/register', registerRateLimit, async (req, res, next) => {
           passwordHash,
           isDono:       true,
           permissions:  null,
+          emailVerificado: !requireEmailVerification,
+          emailVerificadoEm: requireEmailVerification ? null : new Date(),
           empresaId:    empresa.id,
         },
       });
 
-      return { empresa, usuario };
+      let verification = null;
+      if (requireEmailVerification) {
+        verification = await prepareEmailVerification(tx, usuario.id);
+      }
+
+      return { empresa, usuario: { ...usuario, emailVerificado: !requireEmailVerification }, verification };
     });
+
+    let emailMeta = null;
+    if (result.verification) {
+      const verificationUrl = buildVerificationUrl(result.verification.token);
+      let emailResult;
+      try {
+        emailResult = await sendVerificationEmail({
+          to: result.usuario.email,
+          name: result.usuario.nome,
+          verificationUrl,
+        });
+      } catch (err) {
+        console.error('[auth] email verification send failed:', err.message);
+        emailResult = { sent: false, provider: 'resend', reason: err.message };
+      }
+      emailMeta = verificationResponseMeta(emailResult, verificationUrl);
+    }
+
+    if (requireEmailVerification) {
+      return res.status(201).json({
+        ok: true,
+        requiresEmailVerification: true,
+        message: emailMeta?.emailSent
+          ? 'Conta criada. Confirme seu e-mail para acessar o sistema.'
+          : 'Conta criada. Configure o envio de e-mail ou use o link de confirmação em ambiente de desenvolvimento.',
+        email: result.usuario.email,
+        verification: emailMeta,
+      });
+    }
 
     const token = signToken(result.usuario, result.empresa.id, true);
 
     res.status(201).json({
       ok: true,
       token,
-      user: {
-        id:          result.usuario.id,
-        nome:        result.usuario.nome,
-        username:    result.usuario.username,
-        email:       result.usuario.email,
-        isDono:      result.usuario.isDono,
-        permissions: result.usuario.permissions,
-        empresaId:   result.empresa.id,
-        company:     result.empresa.nome,
-      },
+      user: authUserPayload(result.usuario, result.empresa),
+      ...(emailMeta ? { verification: emailMeta } : {}),
     });
   } catch (err) {
     next(err);
@@ -123,21 +201,21 @@ router.post('/login', authIpRateLimit, loginCredentialRateLimit, async (req, res
       return res.status(401).json({ ok: false, message: 'Usuário ou senha incorretos.' });
     }
 
+    if (emailVerificationRequired() && usuario.emailVerificado === false) {
+      return res.status(403).json({
+        ok: false,
+        code: 'EMAIL_NOT_VERIFIED',
+        message: 'Confirme seu e-mail antes de acessar o sistema.',
+        email: usuario.email,
+      });
+    }
+
     const token = signToken(usuario, usuario.empresaId, rememberMe);
 
     res.json({
       ok: true,
       token,
-      user: {
-        id:          usuario.id,
-        nome:        usuario.nome,
-        username:    usuario.username,
-        email:       usuario.email,
-        isDono:      usuario.isDono,
-        permissions: usuario.permissions,
-        empresaId:   usuario.empresaId,
-        company:     usuario.empresa.nome,
-      },
+      user: authUserPayload(usuario, usuario.empresa),
     });
   } catch (err) {
     next(err);
@@ -146,6 +224,97 @@ router.post('/login', authIpRateLimit, loginCredentialRateLimit, async (req, res
 
 // ── PATCH /api/auth/me ───────────────────────────────────
 // Qualquer usuário autenticado pode atualizar seu próprio perfil
+const verifyEmailSchema = z.object({
+  token: z.string().min(32),
+});
+
+router.post('/verify-email', authIpRateLimit, async (req, res, next) => {
+  try {
+    const { token } = verifyEmailSchema.parse(req.body);
+    const tokenHash = hashVerificationToken(token);
+
+    const usuario = await prisma.usuario.findFirst({
+      where: { emailVerificationTokenHash: tokenHash },
+      include: { empresa: true },
+    });
+
+    if (!usuario) {
+      return res.status(400).json({ ok: false, message: 'Link de confirmação inválido.' });
+    }
+
+    if (usuario.emailVerificationExpiresAt && usuario.emailVerificationExpiresAt < new Date()) {
+      return res.status(400).json({ ok: false, message: 'Link de confirmação expirado. Solicite um novo e-mail.' });
+    }
+
+    const atualizado = await prisma.usuario.update({
+      where: { id: usuario.id },
+      data: {
+        emailVerificado: true,
+        emailVerificadoEm: new Date(),
+        emailVerificationTokenHash: null,
+        emailVerificationExpiresAt: null,
+      },
+      include: { empresa: true },
+    });
+
+    const authToken = signToken(atualizado, atualizado.empresaId, true);
+    res.json({
+      ok: true,
+      message: 'E-mail confirmado com sucesso.',
+      token: authToken,
+      user: authUserPayload(atualizado, atualizado.empresa),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+const resendVerificationSchema = z.object({
+  identifier: z.string().min(1),
+});
+
+router.post('/resend-verification', authIpRateLimit, async (req, res, next) => {
+  try {
+    const { identifier } = resendVerificationSchema.parse(req.body);
+    const needle = identifier.toLowerCase();
+    const usuario = await prisma.usuario.findFirst({
+      where: { OR: [{ email: needle }, { username: needle }] },
+    });
+
+    if (!usuario) {
+      return res.json({ ok: true, message: 'Se a conta existir, enviaremos um novo e-mail de confirmação.' });
+    }
+
+    if (usuario.emailVerificado) {
+      return res.json({ ok: true, message: 'Este e-mail já está confirmado.' });
+    }
+
+    const verification = await prepareEmailVerification(prisma, usuario.id);
+    const verificationUrl = buildVerificationUrl(verification.token);
+    let emailResult;
+    try {
+      emailResult = await sendVerificationEmail({
+        to: usuario.email,
+        name: usuario.nome,
+        verificationUrl,
+      });
+    } catch (err) {
+      console.error('[auth] resend verification failed:', err.message);
+      emailResult = { sent: false, provider: 'resend', reason: err.message };
+    }
+
+    res.json({
+      ok: true,
+      message: emailResult.sent
+        ? 'Novo e-mail de confirmação enviado.'
+        : 'Novo link de confirmação gerado. Configure o envio de e-mail ou use o link em ambiente de desenvolvimento.',
+      verification: verificationResponseMeta(emailResult, verificationUrl),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.patch('/me', requireAuth, async (req, res, next) => {
   try {
     const schema = z.object({
@@ -177,6 +346,12 @@ router.patch('/me', requireAuth, async (req, res, next) => {
       ...(data.username && { username: data.username.toLowerCase() }),
       ...(data.email    && { email:    data.email.toLowerCase() }),
     };
+    if (data.email && emailVerificationRequired()) {
+      updateData.emailVerificado = false;
+      updateData.emailVerificadoEm = null;
+      updateData.emailVerificationTokenHash = null;
+      updateData.emailVerificationExpiresAt = null;
+    }
     if (data.password) {
       updateData.passwordHash = await bcrypt.hash(data.password, 10);
     }
@@ -186,7 +361,7 @@ router.patch('/me', requireAuth, async (req, res, next) => {
       data:  updateData,
       select: {
         id: true, nome: true, username: true,
-        email: true, isDono: true, permissions: true,
+        email: true, isDono: true, permissions: true, emailVerificado: true,
       },
     });
 
@@ -208,19 +383,7 @@ router.get('/me', requireAuth, async (req, res, next) => {
       return res.status(404).json({ ok: false, message: 'Usuário não encontrado.' });
     }
 
-    res.json({
-      ok: true,
-      user: {
-        id:          usuario.id,
-        nome:        usuario.nome,
-        username:    usuario.username,
-        email:       usuario.email,
-        isDono:      usuario.isDono,
-        permissions: usuario.permissions,
-        empresaId:   usuario.empresaId,
-        company:     usuario.empresa.nome,
-      },
-    });
+    res.json({ ok: true, user: authUserPayload(usuario, usuario.empresa) });
   } catch (err) {
     next(err);
   }

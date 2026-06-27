@@ -47,14 +47,20 @@ DATABASE_URL="<connection string do Neon — peça ao dono do projeto>"
 JWT_SECRET="<frase secreta — peça ao dono do projeto>"
 INTEGRATION_ENCRYPTION_KEY="<chave aleatória com pelo menos 32 caracteres>"
 PUBLIC_API_URL="http://localhost:3333"
+PUBLIC_APP_URL="http://127.0.0.1:5500"
 PORT=3333
 CORS_ORIGIN="http://127.0.0.1:5500,http://localhost:5500"
+EMAIL_VERIFICATION_REQUIRED=false
+EMAIL_VERIFICATION_TOKEN_HOURS=24
+EMAIL_FROM="NexoERP <onboarding@seudominio.com.br>"
+RESEND_API_KEY=""
 AUTH_RATE_LIMIT_MAX=40
 LOGIN_RATE_LIMIT_MAX=8
 REGISTER_RATE_LIMIT_MAX=5
 ```
 
 Em producao, configure `CORS_ORIGIN` no Railway com os dominios reais do frontend, separados por virgula. Exemplo: `https://nexoerp.netlify.app,https://seudominio.com.br`.
+Para exigir confirmacao de email em producao, configure `EMAIL_VERIFICATION_REQUIRED=true`, `PUBLIC_APP_URL=https://nexoerp.netlify.app` ou seu dominio proprio, `EMAIL_FROM` com um remetente validado e `RESEND_API_KEY` do provedor Resend.
 Os limites de auth sao opcionais. Se nao forem configurados, a API usa os padroes acima: 40 tentativas gerais de auth, 8 tentativas por login/identificador e 5 cadastros por IP.
 
 > O `.env` guarda segredos (senha do banco, chave do JWT). Ele **nunca** é enviado pro GitHub — por isso você precisa criá-lo em cada máquina. Peça os valores ao João.

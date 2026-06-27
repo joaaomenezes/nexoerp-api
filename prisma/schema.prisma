@@ -77,6 +77,10 @@ model Usuario {
   passwordHash String
   isDono       Boolean  @default(false)
   permissions  Json?
+  emailVerificado Boolean  @default(true)
+  emailVerificadoEm DateTime?
+  emailVerificationTokenHash String?
+  emailVerificationExpiresAt DateTime?
   criadoEm     DateTime @default(now())
 
   empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
