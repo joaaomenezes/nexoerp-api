@@ -40,6 +40,10 @@ function buildCorsOrigins() {
 }
 
 const allowedCorsOrigins = buildCorsOrigins();
+const isTest = process.env.NODE_ENV === 'test';
+const isProduction = process.env.NODE_ENV === 'production';
+
+morgan.token('safe-url', req => String(req.originalUrl || req.url || '').split('?')[0]);
 
 app.use(helmet({ crossOriginResourcePolicy: false }));
 app.use(cors({
@@ -51,7 +55,12 @@ app.use(cors({
   methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
   allowedHeaders: ['Content-Type','Authorization'],
 }));
-app.use(morgan('dev'));
+if (!isTest) {
+  app.use(morgan(
+    isProduction ? ':remote-addr :method :safe-url :status :response-time ms' : 'dev',
+    { skip: req => req.path === '/health' }
+  ));
+}
 app.use(express.json());
 
 app.use('/api', routes);
