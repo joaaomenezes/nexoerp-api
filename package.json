@@ -12,7 +12,10 @@
     "db:reset": "prisma migrate reset",
     "test:migrate": "node scripts/run-with-test-env.js npx prisma migrate deploy",
     "test:api": "node scripts/run-with-test-env.js node --test",
-    "test": "npm run test:api"
+    "test": "npm run test:api",
+    "backup:db": "node scripts/db-backup.js --env .env.backup --out backups",
+    "restore:db": "node scripts/db-restore.js --env .env.restore",
+    "restore:validate": "node scripts/db-validate.js --env .env.restore"
   },
   "dependencies": {
     "@prisma/client": "^6.0.0",

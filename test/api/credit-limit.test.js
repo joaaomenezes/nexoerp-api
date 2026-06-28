@@ -11,6 +11,10 @@ process.env.REGISTER_RATE_LIMIT_MAX = '1000';
 const app = require('../../src/app');
 const prisma = new PrismaClient();
 
+function money(value) {
+  return value == null ? value : Number(value);
+}
+
 function listen() {
   return new Promise((resolve) => {
     const server = app.listen(0, '127.0.0.1', () => {
@@ -144,7 +148,7 @@ describe('PDV fiado - limite de credito com PIN supervisor', () => {
       _sum: { valor: true },
       where: { empresaId, clienteId: cliente.id, status: { in: ['avencer', 'vencida', 'pendente'] } },
     });
-    assert.equal(aberto._sum.valor, 50);
+    assert.equal(money(aberto._sum.valor), 50);
   });
 
   it('exige liberacao quando total em aberto mais nova venda passa do limite', async () => {

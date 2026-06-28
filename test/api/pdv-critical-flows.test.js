@@ -14,6 +14,10 @@ const prisma = new PrismaClient();
 const { encryptCredentials } = require('../../src/utils/integrationCrypto');
 const webhookRoutes = require('../../src/routes/webhooks');
 
+function money(value) {
+  return value == null ? value : Number(value);
+}
+
 function listen() {
   return new Promise((resolve) => {
     const server = app.listen(0, '127.0.0.1', () => {
@@ -136,7 +140,7 @@ describe('PDV dinheiro e fechamento de caixa', () => {
       where: { empresaId, vendaId: venda.body.data.id, tipo: 'receita' },
     });
     assert.equal(lancamento.status, 'pago');
-    assert.equal(lancamento.valor, 80);
+    assert.equal(money(lancamento.valor), 80);
     assert.equal(lancamento.formaPagamento, 'dinheiro');
     assert.equal(lancamento.caixaId, caixa.id);
 
@@ -326,11 +330,11 @@ describe('PDV cartao', () => {
       assert.equal(lancamento.status, 'avencer');
       assert.equal(lancamento.parcelasCartao, 2);
       assert.equal(lancamento.parcelaNumero, index + 1);
-      assert.equal(lancamento.valor, 50);
-      assert.equal(lancamento.valorBruto, 50);
-      assert.equal(lancamento.taxaPercentual, 4);
-      assert.equal(lancamento.valorTaxa, 2);
-      assert.equal(lancamento.valorLiquidoPrevisto, 48);
+      assert.equal(money(lancamento.valor), 50);
+      assert.equal(money(lancamento.valorBruto), 50);
+      assert.equal(money(lancamento.taxaPercentual), 4);
+      assert.equal(money(lancamento.valorTaxa), 2);
+      assert.equal(money(lancamento.valorLiquidoPrevisto), 48);
       assert.equal(lancamento.caixaId, caixa.id);
     }
   });
@@ -361,9 +365,9 @@ describe('PDV cartao', () => {
       where: { empresaId, vendaId: venda.body.data.id, formaPagamento: 'cartao_debito' },
     });
     assert.equal(lancamento.status, 'avencer');
-    assert.equal(lancamento.valorBruto, 80);
-    assert.equal(lancamento.valorTaxa, 2);
-    assert.equal(lancamento.valorLiquidoPrevisto, 78);
+    assert.equal(money(lancamento.valorBruto), 80);
+    assert.equal(money(lancamento.valorTaxa), 2);
+    assert.equal(money(lancamento.valorLiquidoPrevisto), 78);
 
     const hoje = new Date().toISOString().slice(0, 10);
     const recebido = await request(ctx, 'PUT', `/api/financeiro/${lancamento.id}`, {
@@ -559,7 +563,7 @@ describe('Pedidos faturado e cancelado', () => {
 
     let lancamento = await prisma.lancamento.findFirst({ where: { empresaId, pedidoId: pedidoCriado.body.data.id } });
     assert.equal(lancamento.status, 'avencer');
-    assert.equal(lancamento.valor, 70);
+    assert.equal(money(lancamento.valor), 70);
 
     const cancelado = await request(ctx, 'DELETE', `/api/pedidos/${pedidoCriado.body.data.id}`, { token });
     assert.equal(cancelado.status, 200);

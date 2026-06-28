@@ -6,3 +6,6 @@ server_err.txt
 server_out.txt
 *.log
 .env.test
+.env.backup
+.env.restore
+backups/

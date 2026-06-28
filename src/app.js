@@ -2,11 +2,19 @@ const express = require('express');
 const cors    = require('cors');
 const helmet  = require('helmet');
 const morgan  = require('morgan');
+const { Prisma } = require('@prisma/client');
 
 const routes      = require('./routes');
 const errorHandler = require('./middleware/errorHandler');
 
 const app = express();
+
+if (Prisma?.Decimal && !Prisma.Decimal.prototype.__nexoJsonNumber) {
+  Prisma.Decimal.prototype.toJSON = function toJSON() {
+    return Number(this.toString());
+  };
+  Object.defineProperty(Prisma.Decimal.prototype, '__nexoJsonNumber', { value: true });
+}
 
 app.set('trust proxy', 1);
 
