@@ -1,0 +1,28 @@
+name: Production healthcheck
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+jobs:
+  healthcheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Check API health
+        run: |
+          set -euo pipefail
+          response="$(curl --silent --show-error --fail --max-time 20 --write-out '\n%{http_code}' https://nexoerp-api-production.up.railway.app/health)"
+          status="$(printf '%s' "$response" | tail -n 1)"
+          body="$(printf '%s' "$response" | sed '$d')"
+
+          echo "HTTP status: $status"
+          echo "Response body: $body"
+
+          if [ "$status" != "200" ]; then
+            echo "Healthcheck failed: expected 200."
+            exit 1
+          fi
+
+          printf '%s' "$body" | grep -q '"ok":true'
