@@ -46,13 +46,13 @@ async function sendVerificationEmail({ to, name, verificationUrl }) {
     return { sent: false, provider: 'console', reason: 'RESEND_API_KEY ou EMAIL_FROM ausente.' };
   }
 
-  const subject = 'Confirme seu e-mail no NexoERP';
+  const subject = 'Confirme seu e-mail no AzzysERP';
   const safeName = name || 'usuario';
   const html = `
     <div style="font-family:Arial,sans-serif;line-height:1.5;color:#111827">
       <h2>Confirme seu e-mail</h2>
       <p>Olá, ${safeName}.</p>
-      <p>Para ativar sua conta no NexoERP, clique no botão abaixo:</p>
+      <p>Para ativar sua conta no AzzysERP, clique no botão abaixo:</p>
       <p>
         <a href="${verificationUrl}" style="display:inline-block;background:#00c896;color:#021c14;padding:12px 18px;border-radius:8px;text-decoration:none;font-weight:700">
           Confirmar e-mail

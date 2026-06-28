@@ -9,7 +9,10 @@
     "db:migrate": "prisma migrate dev",
     "db:generate": "prisma generate",
     "db:studio": "prisma studio",
-    "db:reset": "prisma migrate reset"
+    "db:reset": "prisma migrate reset",
+    "test:migrate": "node scripts/run-with-test-env.js npx prisma migrate deploy",
+    "test:api": "node scripts/run-with-test-env.js node --test",
+    "test": "npm run test:api"
   },
   "dependencies": {
     "@prisma/client": "^6.0.0",
