@@ -81,6 +81,7 @@ model Usuario {
   emailVerificadoEm DateTime?
   emailVerificationTokenHash String?
   emailVerificationExpiresAt DateTime?
+  passwordResetTokens PasswordResetToken[]
   criadoEm     DateTime @default(now())
 
   empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
@@ -89,6 +90,24 @@ model Usuario {
   @@unique([email, empresaId])
   @@unique([username, empresaId])
   @@map("usuarios")
+}
+
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+  ip        String?
+  userAgent String?
+
+  user Usuario @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([tokenHash])
+  @@index([expiresAt])
+  @@map("password_reset_tokens")
 }
 
 // ─── PRODUTO ─────────────────────────────────────────────

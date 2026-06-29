@@ -9,6 +9,7 @@ const {
   authIpRateLimit,
   loginCredentialRateLimit,
   registerRateLimit,
+  passwordResetEmailRateLimit,
 } = require('../middleware/rateLimit');
 const {
   buildVerificationUrl,
@@ -18,6 +19,14 @@ const {
   sendVerificationEmail,
   verificationExpiresAt,
 } = require('../services/emailVerification');
+const {
+  buildPasswordResetUrl,
+  createPasswordResetToken,
+  hashPasswordResetToken,
+  passwordResetExpiresAt,
+  sendPasswordChangedEmail,
+  sendPasswordResetEmail,
+} = require('../services/passwordReset');
 
 const prisma = new PrismaClient();
 
@@ -310,6 +319,136 @@ router.post('/resend-verification', authIpRateLimit, async (req, res, next) => {
         : 'Novo link de confirmação gerado. Configure o envio de e-mail ou use o link em ambiente de desenvolvimento.',
       verification: verificationResponseMeta(emailResult, verificationUrl),
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+const forgotPasswordSchema = z.object({
+  email: z.string().trim().email(),
+});
+
+const resetPasswordSchema = z.object({
+  token: z.string().trim().min(32),
+  password: z.string()
+    .min(8, 'A senha deve ter no mínimo 8 caracteres.')
+    .regex(/[A-Za-z]/, 'A senha deve conter pelo menos uma letra.')
+    .regex(/[0-9]/, 'A senha deve conter pelo menos um número.'),
+  confirmPassword: z.string().min(1),
+}).refine(data => data.password === data.confirmPassword, {
+  path: ['confirmPassword'],
+  message: 'As senhas não conferem.',
+});
+
+const PASSWORD_RESET_GENERIC_MESSAGE = 'Se este e-mail estiver cadastrado, enviaremos um link para redefinir sua senha.';
+
+router.post('/forgot-password', authIpRateLimit, passwordResetEmailRateLimit, async (req, res, next) => {
+  try {
+    const { email } = forgotPasswordSchema.parse(req.body);
+    const normalizedEmail = email.toLowerCase();
+    const usuarios = await prisma.usuario.findMany({ where: { email: normalizedEmail } });
+
+    if (!usuarios.length) {
+      console.info('[auth] password reset requested for non-existing email');
+      return res.json({ ok: true, message: PASSWORD_RESET_GENERIC_MESSAGE });
+    }
+
+    const ip = req.ip || req.headers['x-forwarded-for'] || req.socket?.remoteAddress || null;
+    const userAgent = req.get('user-agent') || null;
+
+    for (const usuario of usuarios) {
+      const token = createPasswordResetToken();
+      const tokenHash = hashPasswordResetToken(token);
+      const expiresAt = passwordResetExpiresAt();
+      const resetUrl = buildPasswordResetUrl(token);
+
+      await prisma.$transaction(async (tx) => {
+        await tx.passwordResetToken.updateMany({
+          where: { userId: usuario.id, usedAt: null },
+          data: { usedAt: new Date() },
+        });
+        await tx.passwordResetToken.create({
+          data: {
+            userId: usuario.id,
+            tokenHash,
+            expiresAt,
+            ip: ip ? String(ip).slice(0, 120) : null,
+            userAgent: userAgent ? String(userAgent).slice(0, 300) : null,
+          },
+        });
+      });
+
+      try {
+        await sendPasswordResetEmail({
+          to: usuario.email,
+          name: usuario.nome,
+          resetUrl,
+        });
+      } catch (err) {
+        console.error('[auth] password reset email failed:', err.message);
+      }
+    }
+
+    console.info('[auth] password reset requested');
+    return res.json({ ok: true, message: PASSWORD_RESET_GENERIC_MESSAGE });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/reset-password', authIpRateLimit, async (req, res, next) => {
+  try {
+    const { token, password } = resetPasswordSchema.parse(req.body);
+    const tokenHash = hashPasswordResetToken(token);
+
+    const resetToken = await prisma.passwordResetToken.findFirst({
+      where: { tokenHash },
+      include: { user: true },
+    });
+
+    if (!resetToken || resetToken.usedAt) {
+      return res.status(400).json({ ok: false, message: 'Link de redefinição inválido ou já utilizado.' });
+    }
+
+    if (resetToken.expiresAt < new Date()) {
+      await prisma.passwordResetToken.update({
+        where: { id: resetToken.id },
+        data: { usedAt: new Date() },
+      });
+      return res.status(400).json({ ok: false, message: 'Link de redefinição expirado. Solicite um novo link.' });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 10);
+
+    await prisma.$transaction(async (tx) => {
+      await tx.usuario.update({
+        where: { id: resetToken.userId },
+        data: { passwordHash },
+      });
+      await tx.passwordResetToken.update({
+        where: { id: resetToken.id },
+        data: { usedAt: new Date() },
+      });
+      await tx.passwordResetToken.updateMany({
+        where: {
+          userId: resetToken.userId,
+          usedAt: null,
+          NOT: { id: resetToken.id },
+        },
+        data: { usedAt: new Date() },
+      });
+    });
+
+    try {
+      await sendPasswordChangedEmail({
+        to: resetToken.user.email,
+        name: resetToken.user.nome,
+      });
+    } catch (err) {
+      console.error('[auth] password changed email failed:', err.message);
+    }
+
+    res.json({ ok: true, message: 'Senha alterada com sucesso. Acesse sua conta com a nova senha.' });
   } catch (err) {
     next(err);
   }

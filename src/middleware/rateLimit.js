@@ -67,9 +67,20 @@ const registerRateLimit = createRateLimiter({
   message: 'Muitas tentativas de cadastro. Aguarde alguns minutos e tente novamente.',
 });
 
+const passwordResetEmailRateLimit = createRateLimiter({
+  windowMs: positiveIntFromEnv('PASSWORD_RESET_RATE_LIMIT_WINDOW_MS', 60 * 60 * 1000),
+  max: positiveIntFromEnv('PASSWORD_RESET_RATE_LIMIT_MAX', 5),
+  keyGenerator: req => {
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    return `password-reset-email:${email || 'empty'}`;
+  },
+  message: 'Muitas solicitações de recuperação. Aguarde alguns minutos e tente novamente.',
+});
+
 module.exports = {
   createRateLimiter,
   authIpRateLimit,
   loginCredentialRateLimit,
   registerRateLimit,
+  passwordResetEmailRateLimit,
 };
